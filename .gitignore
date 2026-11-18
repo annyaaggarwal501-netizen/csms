@@ -1,0 +1,13 @@
+target/
+*.iml
+.idea/
+.vscode/
+*.log
+.DS_Store
+
+# Secrets: database password etc. Never commit this file.
+.env
+preview/
+
+# Old prototype screenshots (kept locally only)
+docs/screenshots_old_prototype/

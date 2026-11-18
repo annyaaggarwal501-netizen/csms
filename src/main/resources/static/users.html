@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Staff & logins – Shop</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#221a1f">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+</head>
+<body>
+<main class="stack">
+  <div class="page-head">
+    <div><h1>Staff & logins</h1><p class="muted small">Give every person their own login, so the activity log shows who did what.</p></div>
+    <button class="primary" id="addBtn">+ Add staff login</button>
+  </div>
+  <div class="card flush table-wrap">
+    <table>
+      <thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Status</th><th>Last login</th><th></th></tr></thead>
+      <tbody id="body"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</main>
+<script src="js/app.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const ROLE = { OWNER: 'Owner', SALES_STAFF: 'Sales staff' };
+  let rows = [];
+
+  requireLogin(['OWNER']).then(() => { $('addBtn').onclick = () => edit(null); load(); });
+
+  async function load() {
+    rows = await api('/users');
+    $('body').innerHTML = rows.map(u => `<tr>
+      <td><b>${esc(u.fullName)}</b>${u.id === ME.id ? ' <span class="badge brand">You</span>' : ''}</td>
+      <td class="code">${esc(u.username)}</td>
+      <td>${ROLE[u.role]}</td>
+      <td>${!u.active ? '<span class="badge grey">Switched off</span>' : u.locked ? '<span class="badge err">Locked</span>'
+          : u.mustChangePassword ? '<span class="badge warn">Temporary password</span>' : '<span class="badge ok">Active</span>'}</td>
+      <td class="small">${u.lastLoginAt ? fmtDateTime(u.lastLoginAt) : '<span class="muted">Never</span>'}</td>
+      <td class="num"><div class="row tight" style="justify-content:flex-end">
+        ${u.locked ? `<button class="small" data-unlock="${u.id}">Unlock</button>` : ''}
+        <button class="small" data-reset="${u.id}">Reset password</button>
+        <button class="small" data-edit="${u.id}">Edit</button></div></td></tr>`).join('');
+    document.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => edit(rows.find(u => u.id == b.dataset.edit)));
+    document.querySelectorAll('[data-reset]').forEach(b => b.onclick = () => reset(rows.find(u => u.id == b.dataset.reset)));
+    document.querySelectorAll('[data-unlock]').forEach(b => b.onclick = async () => {
+      try { await api(`/users/${b.dataset.unlock}/unlock`, { method: 'POST' }); toast('Login unlocked.', 'ok'); load(); }
+      catch (err) { toast(err.message, 'err'); }
+    });
+  }
+
+  function edit(u) {
+    const m = openModal(`<h2>${u ? 'Edit ' + esc(u.fullName) : 'Add staff login'}</h2>
+      <form id="f" autocomplete="off"><div class="form-grid">
+        <div class="field full"><label>Full name</label><input type="text" name="fullName" value="${esc(u ? u.fullName : '')}" required></div>
+        ${u ? '' : `<div class="field"><label>Username</label><input type="text" name="username" placeholder="e.g. riya" autocapitalize="off" required>
+          <div class="hint">Small letters, numbers, dot or underscore.</div></div>
+          <div class="field"><label>Temporary password</label><input type="text" name="password" value="${tempPassword()}" required>
+          <div class="hint">They must change it at first login.</div></div>`}
+        <div class="field"><label>Role</label><select name="role">
+          <option value="SALES_STAFF">Sales staff – billing, returns, customers</option>
+          <option value="OWNER">Owner – everything, incl. reports and settings</option></select></div>
+        ${u ? `<div class="field"><label>&nbsp;</label><label class="checkbox"><input type="checkbox" name="active" ${u.active ? 'checked' : ''}> Login is switched on</label></div>` : ''}
+      </div><div id="fMsg"></div>
+      <div class="actions"><button type="button" data-close>Cancel</button><button class="primary">Save</button></div></form>`);
+    const f = m.el.querySelector('#f');
+    f.role.value = u ? u.role : 'SALES_STAFF';
+    f.onsubmit = async e => {
+      e.preventDefault();
+      const body = formData(f);
+      try {
+        if (u) await api('/users/' + u.id, { method: 'PUT', body });
+        else {
+          await api('/users', { method: 'POST', body });
+          showCreated(body);
+        }
+        m.close(); load();
+        if (u) toast('Saved.', 'ok');
+      } catch (err) { formError(f, m.el.querySelector('#fMsg'), err); }
+    };
+  }
+
+  function reset(u) {
+    const m = openModal(`<h2>Reset password – ${esc(u.fullName)}</h2>
+      <p class="muted">Give this temporary password to ${esc(u.fullName)}. They must change it when they log in.</p>
+      <div class="field"><label>Temporary password</label><input type="text" id="pw" value="${tempPassword()}"></div>
+      <div id="rMsg"></div>
+      <div class="actions"><button data-close>Cancel</button><button class="primary" id="ok">Reset password</button></div>`);
+    m.el.querySelector('#ok').onclick = async () => {
+      const password = m.el.querySelector('#pw').value.trim();
+      try {
+        await api(`/users/${u.id}/reset-password`, { method: 'POST', body: { password } });
+        m.close(); load();
+        showCreated({ username: u.username, password, fullName: u.fullName });
+      } catch (err) { showError(m.el.querySelector('#rMsg'), err); }
+    };
+  }
+
+  function showCreated(b) {
+    const text = `Login for ${b.fullName}\nWebsite: ${location.origin}\nUsername: ${b.username}\nTemporary password: ${b.password}`;
+    const m = openModal(`<h2>Login ready</h2><p class="muted">Share these details with ${esc(b.fullName)}:</p>
+      <div class="share-text">${esc(text)}</div>
+      <div class="actions"><button id="copy">Copy</button><button class="primary" data-close>Done</button></div>`);
+    m.el.querySelector('#copy').onclick = () => navigator.clipboard.writeText(text).then(() => toast('Copied.', 'ok'));
+  }
+
+  function tempPassword() {
+    const words = ['Shop', 'Kurti', 'Saree', 'Silk', 'Cotton', 'Lehenga'];
+    return words[Math.floor(Math.random() * words.length)] + (1000 + Math.floor(Math.random() * 9000));
+  }
+</script>
+</body>
+</html>

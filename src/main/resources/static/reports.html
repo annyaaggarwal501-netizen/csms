@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Reports – Shop</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#221a1f">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+</head>
+<body>
+<main class="stack">
+  <div class="page-head">
+    <div><h1>Reports</h1><p class="muted small" id="period"></p></div>
+    <div class="row tight no-print"><button id="csvBtn">Excel (CSV)</button><button id="xlsxBtn" class="hidden">Excel (.xlsx)</button><button id="printBtn">Print / PDF</button></div>
+  </div>
+  <div class="card row no-print">
+    <div class="tabs" id="tabs">
+      <button data-t="sales" class="on">Sales</button><button data-t="gst" class="gst-only hidden">GST</button><button data-t="profit">Profit</button>
+      <button data-t="stock">Stock value</button><button data-t="staff">Staff</button>
+    </div>
+    <div class="grow"></div>
+    <div class="row tight" id="dates">
+      <select id="preset" style="width:auto">
+        <option value="today">Today</option><option value="yesterday">Yesterday</option><option value="week">Last 7 days</option>
+        <option value="month" selected>This month</option><option value="lastmonth">Last month</option><option value="custom">Choose dates…</option>
+      </select>
+      <input type="date" id="from" style="width:auto"><span class="muted">to</span><input type="date" id="to" style="width:auto">
+    </div>
+  </div>
+  <div id="out" class="stack"></div>
+</main>
+<script src="js/app.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  let tab = 'sales', gst = false, csv = null;
+  const kpi = (label, value, sub = '', cls = '') => `<div class="card kpi ${cls}"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+  const bar = (v, max) => `<div class="hbar"><span style="width:${max > 0 ? Math.max(2, 100 * v / max) : 0}%"></span></div>`;
+
+  requireLogin(['OWNER']).then(async () => {
+    gst = (await shopSettings()).gstRegistered;
+    if (gst) document.querySelectorAll('.gst-only').forEach(e => e.classList.remove('hidden'));
+    $('tabs').querySelectorAll('button').forEach(b => b.onclick = () => {
+      $('tabs').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+      tab = b.dataset.t; load();
+    });
+    $('preset').onchange = () => { setPreset(); load(); };
+    $('from').onchange = $('to').onchange = () => { $('preset').value = 'custom'; load(); };
+    $('printBtn').onclick = () => window.print();
+    $('csvBtn').onclick = () => csv && csv();
+    $('xlsxBtn').onclick = () => location.href = `${API}/reports/sales.xlsx?from=${$('from').value}&to=${$('to').value}`;
+    setPreset(); load();
+  });
+
+  function setPreset() {
+    const t = new Date(), p = $('preset').value;
+    let f = new Date(t), to = new Date(t);
+    if (p === 'yesterday') { f.setDate(t.getDate() - 1); to = new Date(f); }
+    if (p === 'week') f.setDate(t.getDate() - 6);
+    if (p === 'month') f = new Date(t.getFullYear(), t.getMonth(), 1);
+    if (p === 'lastmonth') { f = new Date(t.getFullYear(), t.getMonth() - 1, 1); to = new Date(t.getFullYear(), t.getMonth(), 0); }
+    if (p !== 'custom') { $('from').value = isoDate(f); $('to').value = isoDate(to); }
+  }
+
+  async function load() {
+    const from = $('from').value, to = $('to').value;
+    $('dates').classList.toggle('hidden', tab === 'stock');
+    $('xlsxBtn').classList.toggle('hidden', tab !== 'sales' && tab !== 'gst');
+    $('period').textContent = tab === 'stock' ? 'Stock as of now' : `${fmtDate(from)} – ${fmtDate(to)}`;
+    $('out').innerHTML = '<div class="card muted">Loading…</div>';
+    try {
+      const qs = `from=${from}&to=${to}`;
+      if (tab === 'sales') sales(await api('/reports/sales?' + qs));
+      if (tab === 'gst') gstReport(await api('/reports/sales?' + qs));
+      if (tab === 'profit') profit(await api('/reports/profit?' + qs));
+      if (tab === 'stock') stock(await api('/reports/stock-value'));
+      if (tab === 'staff') staff(await api('/reports/staff?' + qs));
+    } catch (err) { $('out').innerHTML = errorHtml(err); }
+  }
+
+  function sales(r) {
+    const t = r.totals;
+    const maxDay = Math.max(0, ...r.daily.map(d => Number(d.net_sales)));
+    $('out').innerHTML = `<div class="grid kpis">
+        ${kpi('Net sales', rs0(t.net_sales), t.bills + ' bills', 'accent')}${kpi('Average bill', rs0(t.avg_bill))}
+        ${kpi('Discounts given', rs0(t.discounts))}${kpi('Returns', rs0(t.returns_value), t.credit_notes + ' credit notes')}
+        ${kpi('After returns', rs0(t.net_after_returns))}</div>
+      <div class="grid cols-2">
+        <div class="card"><h2>Day by day</h2><div class="table-wrap"><table><thead><tr><th>Day</th><th class="num">Bills</th><th class="num">Sales</th><th></th></tr></thead>
+          <tbody>${r.daily.map(d => `<tr><td>${fmtDate(d.day)}</td><td class="num">${d.bills}</td><td class="num">${rs0(d.net_sales)}</td><td style="width:35%">${bar(d.net_sales, maxDay)}</td></tr>`).join('')
+            || '<tr><td colspan="4" class="empty">No sales in this period.</td></tr>'}</tbody></table></div></div>
+        <div class="card"><h2>Payment modes</h2><table><tbody>${r.payments.map(p => `<tr><td>${esc(p.mode.replace('_', ' '))}</td><td class="num">${p.count}</td><td class="num">${rs0(p.amount)}</td></tr>`).join('')
+            || '<tr><td class="empty">—</td></tr>'}</tbody></table></div>
+      </div>
+      <div class="card flush"><h2>Bills</h2><div class="table-wrap"><table>
+        <thead><tr><th>Bill no</th><th>Date</th><th>Customer</th><th>By</th><th class="num">Items</th><th class="num">Discount</th><th class="num">Total</th><th>Paid by</th></tr></thead>
+        <tbody>${r.bills.map(b => `<tr><td><a href="receipt.html?id=${b.sale_id}&dup=1" target="_blank">${esc(b.invoice_no)}</a>
+          ${b.status !== 'COMPLETED' ? ` <span class="badge info">${esc(b.status.replace('_', ' ').toLowerCase())}</span>` : ''}</td>
+          <td class="small nowrap">${fmtDateTime(b.completed_at)}</td><td>${esc(b.customer_name || '—')}</td><td class="small">${esc(b.cashier)}</td>
+          <td class="num">${b.items}</td><td class="num">${rs0(b.discount_total)}</td><td class="num"><b>${rs0(b.grand_total)}</b></td><td class="small">${esc(b.payments || '')}</td></tr>`).join('')
+          || '<tr><td colspan="8" class="empty">No bills.</td></tr>'}</tbody></table></div></div>`;
+    csv = () => downloadCsv(`sales_${r.from}_to_${r.to}.csv`, [['invoice_no', 'Bill no'], [b => fmtDateTime(b.completed_at), 'Date'], ['status', 'Status'],
+      ['customer_name', 'Customer'], ['cashier', 'By'], ['items', 'Items'], ['subtotal', 'Gross'], ['discount_total', 'Discount'],
+      ...(gst ? [['taxable_total', 'Taxable'], ['cgst_total', 'CGST'], ['sgst_total', 'SGST']] : []), ['round_off', 'Round off'], ['grand_total', 'Total'], ['payments', 'Paid by']], r.bills);
+  }
+
+  function gstReport(r) {
+    const t = r.totals;
+    $('out').innerHTML = `<div class="grid kpis">${kpi('Taxable value', rs0(t.taxable))}${kpi('CGST', rs(t.cgst))}${kpi('SGST', rs(t.sgst))}${kpi('Total GST', rs(Number(t.cgst) + Number(t.sgst)), '', 'accent')}</div>
+      <div class="card flush"><h2>By GST rate</h2><div class="table-wrap"><table><thead><tr><th>Rate</th><th class="num">Pieces</th><th class="num">Taxable value</th><th class="num">CGST</th><th class="num">SGST</th><th class="num">Total tax</th></tr></thead>
+        <tbody>${r.gstByRate.map(g => `<tr><td>${pct(g.gst_rate)}</td><td class="num">${g.qty}</td><td class="num">${rs(g.taxable)}</td><td class="num">${rs(g.cgst)}</td><td class="num">${rs(g.sgst)}</td><td class="num">${rs(g.tax)}</td></tr>`).join('')
+        || '<tr><td colspan="6" class="empty">No GST sales.</td></tr>'}</tbody></table></div></div>
+      <div class="card flush"><h2>HSN summary (for GSTR-1)</h2><div class="table-wrap"><table><thead><tr><th>HSN</th><th>Rate</th><th class="num">Pieces</th><th class="num">Taxable value</th><th class="num">Tax</th></tr></thead>
+        <tbody>${r.hsn.map(h => `<tr><td class="code">${esc(h.hsn_code || '—')}</td><td>${pct(h.gst_rate)}</td><td class="num">${h.qty}</td><td class="num">${rs(h.taxable)}</td><td class="num">${rs(h.tax)}</td></tr>`).join('')
+        || '<tr><td colspan="5" class="empty">—</td></tr>'}</tbody></table></div></div>
+      <p class="muted small">Returns (credit notes) in this period: ${rs(t.returns_value)}. Show these to your accountant with the HSN summary.</p>`;
+    csv = () => downloadCsv(`hsn_summary_${r.from}_to_${r.to}.csv`, [['hsn_code', 'HSN'], ['gst_rate', 'Rate %'], ['qty', 'Qty'], ['taxable', 'Taxable value'], ['tax', 'Tax']], r.hsn);
+  }
+
+  function profit(r) {
+    const t = r.totals;
+    const max = Math.max(0, ...r.byCategory.map(c => Number(c.profit)));
+    $('out').innerHTML = `<div class="grid kpis">${kpi('Profit', rs0(t.profit), t.margin_percent + '% margin', 'accent')}${kpi('Sales (without tax)', rs0(t.revenue), t.qty + ' pieces')}${kpi('Cost of goods sold', rs0(t.cost))}</div>
+      <div class="msg info small">Profit = sale price without GST − what you paid for those pieces. Returned pieces are left out. Shop rent, salary and other expenses are not included.</div>
+      <div class="card flush"><h2>By category</h2><div class="table-wrap"><table><thead><tr><th>Category</th><th class="num">Pieces</th><th class="num">Sales</th><th class="num">Cost</th><th class="num">Profit</th><th class="num">Margin</th><th></th></tr></thead>
+        <tbody>${r.byCategory.map(c => `<tr><td>${esc(c.category)}</td><td class="num">${c.qty}</td><td class="num">${rs0(c.revenue)}</td><td class="num">${rs0(c.cost)}</td><td class="num"><b>${rs0(c.profit)}</b></td><td class="num">${c.margin_percent}%</td><td style="width:20%">${bar(c.profit, max)}</td></tr>`).join('')
+        || '<tr><td colspan="7" class="empty">No sales in this period.</td></tr>'}</tbody></table></div></div>
+      <div class="card flush"><h2>By product (top 100)</h2><div class="table-wrap"><table><thead><tr><th>Product</th><th>Category</th><th class="num">Pieces</th><th class="num">Sales</th><th class="num">Profit</th><th class="num">Margin</th></tr></thead>
+        <tbody>${r.byProduct.map(p => `<tr><td><span class="with-thumb">${productImg(p.product_id, 'thumb sm')}${esc(p.name)}</span></td><td class="small">${esc(p.category)}</td><td class="num">${p.qty}</td><td class="num">${rs0(p.revenue)}</td><td class="num"><b style="color:${Number(p.profit) < 0 ? 'var(--err)' : 'inherit'}">${rs0(p.profit)}</b></td><td class="num">${p.margin_percent}%</td></tr>`).join('')
+        || '<tr><td colspan="6" class="empty">—</td></tr>'}</tbody></table></div></div>`;
+    csv = () => downloadCsv(`profit_${r.from}_to_${r.to}.csv`, [['name', 'Product'], ['category', 'Category'], ['qty', 'Pieces'], ['revenue', 'Sales without tax'], ['cost', 'Cost'], ['profit', 'Profit'], ['margin_percent', 'Margin %']], r.byProduct);
+  }
+
+  function stock(r) {
+    const t = r.totals;
+    const max = Math.max(0, ...r.byCategory.map(c => Number(c.cost_value)));
+    $('out').innerHTML = `<div class="grid kpis">${kpi('Stock value at cost', rs0(t.cost_value), '', 'accent')}${kpi('At selling price', rs0(t.sale_value))}${kpi('Pieces', inr0.format(t.pieces))}</div>
+      <div class="card flush"><h2>By category</h2><div class="table-wrap"><table><thead><tr><th>Category</th><th class="num">Products</th><th class="num">Pieces</th><th class="num">Value at cost</th><th class="num">At price</th><th></th></tr></thead>
+        <tbody>${r.byCategory.map(c => `<tr><td>${esc(c.category)}</td><td class="num">${c.products}</td><td class="num">${c.pieces}</td><td class="num"><b>${rs0(c.cost_value)}</b></td><td class="num">${rs0(c.sale_value)}</td><td style="width:22%">${bar(c.cost_value, max)}</td></tr>`).join('')}</tbody></table></div></div>
+      <div class="card flush"><h2>Slow-moving stock <span class="muted small">(not sold in 60 days)</span></h2><div class="table-wrap"><table><thead><tr><th>Item</th><th>SKU</th><th class="num">In stock</th><th class="num">Money stuck</th><th>Last sold</th></tr></thead>
+        <tbody>${r.slowMoving.map(s => `<tr><td><span class="with-thumb">${productImg(s.product_id, 'thumb sm')}<span>${esc(s.name)}<div class="small muted">${esc(s.size)} / ${esc(s.colour)}</div></span></span></td><td class="code small">${esc(s.sku)}</td><td class="num">${s.stock_qty}</td><td class="num">${rs0(s.cost_value)}</td><td class="small">${s.last_sold ? fmtDate(s.last_sold) : '<span class="muted">Never</span>'}</td></tr>`).join('')
+        || '<tr><td colspan="5" class="empty">Everything is selling. 👍</td></tr>'}</tbody></table></div>
+        <p class="muted small" style="padding:0 1.2rem 1rem">Tip: put slow items in an offer (Offers → New offer) to free up the money.</p></div>`;
+    csv = () => downloadCsv(`slow_stock_${isoDate(new Date())}.csv`, [['name', 'Item'], ['size', 'Size'], ['colour', 'Colour'], ['sku', 'SKU'], ['stock_qty', 'In stock'], ['cost_value', 'Value at cost'], [s => s.last_sold ? fmtDate(s.last_sold) : 'Never', 'Last sold']], r.slowMoving);
+  }
+
+  function staff(rows) {
+    const max = Math.max(0, ...rows.map(r => Number(r.sales)));
+    $('out').innerHTML = `<div class="card flush"><h2>Sales by staff</h2><div class="table-wrap"><table><thead><tr><th>Name</th><th class="num">Bills</th><th class="num">Sales</th><th class="num">Discount given</th><th></th></tr></thead>
+      <tbody>${rows.map(r => `<tr><td><b>${esc(r.full_name)}</b> <span class="muted small">${esc(r.username)}</span></td><td class="num">${r.bills}</td><td class="num">${rs0(r.sales)}</td><td class="num">${rs0(r.discounts)}</td><td style="width:30%">${bar(r.sales, max)}</td></tr>`).join('')
+      || '<tr><td colspan="5" class="empty">No sales in this period.</td></tr>'}</tbody></table></div></div>`;
+    csv = () => downloadCsv(`staff_sales_${$('from').value}_to_${$('to').value}.csv`, [['full_name', 'Name'], ['bills', 'Bills'], ['sales', 'Sales'], ['discounts', 'Discounts']], rows);
+  }
+</script>
+</body>
+</html>

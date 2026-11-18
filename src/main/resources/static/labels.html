@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Barcode labels – Shop</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#221a1f">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <style>
+    @page { size: A4; margin: 8mm; }
+    .preview { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 8mm; overflow-x: auto; }
+    .preview .labels-sheet { width: 194mm; margin: 0 auto; }
+    @media print { .preview { border: 0; padding: 0; } .preview .labels-sheet { width: 100%; } }
+  </style>
+</head>
+<body>
+<main class="stack">
+  <div class="page-head no-print">
+    <div><h1>Barcode labels</h1><p class="muted small">Stick these on the tags. The scanner at the counter reads them straight into the bill.</p></div>
+    <button class="primary" id="printBtn">Print labels</button>
+  </div>
+
+  <div class="grid side no-print">
+    <div class="card">
+      <h2>1. Choose items</h2>
+      <div class="scan-box" style="margin-bottom:.6rem">
+        <svg class="i scan-ico" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <input type="search" id="q" placeholder="Search item, SKU, or scan barcode" autocomplete="off">
+        <div id="results" class="search-results hidden"></div>
+      </div>
+      <div class="row tight small" style="margin-bottom:.6rem">
+        <span class="muted">Quick add:</span>
+        <select id="purchase" style="width:auto"><option value="">From a stock-in bill…</option></select>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Item</th><th class="num">Price</th><th style="width:130px">Labels</th><th></th></tr></thead>
+        <tbody id="list"></tbody>
+      </table></div>
+      <div class="row between" style="margin-top:.6rem"><span class="muted small" id="total"></span><button class="small danger" id="clear">Clear list</button></div>
+    </div>
+    <div class="card">
+      <h2>2. Label size</h2>
+      <div class="field"><label>Sheet</label><select id="layout">
+        <option value="5,21">65 per sheet (38 × 21 mm)</option>
+        <option value="4,25.4" selected>40 per sheet (48 × 25 mm)</option>
+        <option value="3,34">24 per sheet (64 × 34 mm)</option>
+        <option value="2,38">14 per sheet (99 × 38 mm)</option>
+      </select><div class="hint">Use A4 sticker sheets of the same size. In the print box choose "Actual size" / scale 100%.</div></div>
+      <label class="checkbox"><input type="checkbox" id="showShop" checked> Shop name on label</label>
+      <label class="checkbox"><input type="checkbox" id="showMrp" checked> Show MRP (when higher than price)</label>
+      <div class="field" style="margin-top:.6rem"><label>Skip first labels (for a half-used sheet)</label><input type="number" id="skip" min="0" max="64" value="0"></div>
+    </div>
+  </div>
+
+  <div class="preview"><div class="labels-sheet" id="sheet"></div></div>
+</main>
+<script src="js/app.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  let items = [], results = [], shopName = '';
+
+  // ----- EAN-13 barcode as SVG (95 modules) -----
+  const L = ['0001101','0011001','0010011','0111101','0100011','0110001','0101111','0111011','0110111','0001011'];
+  const R = L.map(c => c.replace(/./g, b => b === '0' ? '1' : '0'));
+  const G = R.map(c => c.split('').reverse().join(''));
+  const PARITY = ['LLLLLL','LLGLGG','LLGGLG','LLGGGL','LGLLGG','LGGLLG','LGGGLL','LGLGLG','LGLGGL','LGGLGL'];
+  function ean13Svg(code) {
+    if (!/^\d{13}$/.test(code)) return `<div class="lv" style="font-family:monospace;font-size:11pt;padding:3mm 0">${esc(code)}</div>`;
+    const d = code.split('').map(Number);
+    let bits = '101';
+    for (let i = 1; i <= 6; i++) bits += (PARITY[d[0]][i - 1] === 'L' ? L : G)[d[i]];
+    bits += '01010';
+    for (let i = 7; i <= 12; i++) bits += R[d[i]];
+    bits += '101';
+    let rects = '';
+    for (let i = 0; i < bits.length; i++) {
+      if (bits[i] !== '1') continue;
+      let w = 1; while (bits[i + w] === '1') w++;
+      const guard = i < 3 || (i >= 45 && i < 50) || i >= 92;
+      rects += `<rect x="${i + 7}" y="0" width="${w}" height="${guard ? 44 : 40}"/>`;
+      i += w - 1;
+    }
+    return `<svg viewBox="0 0 109 44" preserveAspectRatio="none" shape-rendering="crispEdges">${rects}</svg>
+      <div class="bdigits">${d[0]}&nbsp;&nbsp;${code.slice(1, 7)}&nbsp;&nbsp;${code.slice(7)}</div>`;
+  }
+
+  requireLogin().then(async me => {
+    shopName = (await shopSettings()).shopName || '';
+    if (me.role === 'OWNER') {
+      const ps = await api('/purchases').catch(() => []);
+      $('purchase').innerHTML += ps.map(p => `<option value="${p.purchase_id}">${fmtDate(p.bill_date)} · ${esc(p.supplier)} · bill ${esc(p.bill_no)} (${p.pieces} pcs)</option>`).join('');
+    } else $('purchase').parentElement.classList.add('hidden');
+    $('purchase').onchange = async () => {
+      if (!$('purchase').value) return;
+      addRows(await api('/stock/labels?purchaseId=' + $('purchase').value));
+      $('purchase').value = '';
+    };
+    $('q').addEventListener('input', debounce(search, 250));
+    $('q').addEventListener('keydown', async e => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      if (/^\d{8,14}$/.test($('q').value.trim())) {
+        try { const v = await api('/variants?barcode=' + $('q').value.trim()); addRows(await api('/stock/labels?ids=' + v.id)); $('q').value = ''; }
+        catch (err) { toast(err.message, 'err'); }
+      } else if (results[0]) pick(0);
+    });
+    document.addEventListener('click', e => { if (!e.target.closest('.scan-box')) $('results').classList.add('hidden'); });
+    ['layout', 'showShop', 'showMrp', 'skip'].forEach(id => $(id).onchange = render);
+    $('clear').onclick = () => { items = []; render(); };
+    $('printBtn').onclick = () => { if (!items.length) toast('Add some items first.', 'warn'); else window.print(); };
+    const ids = param('ids');
+    if (ids) addRows(await api('/stock/labels?ids=' + ids));
+    if (param('purchase')) addRows(await api('/stock/labels?purchaseId=' + param('purchase')));
+    render();
+  });
+
+  async function search() {
+    const q = $('q').value.trim();
+    if (q.length < 2 || /^\d+$/.test(q)) { $('results').classList.add('hidden'); return; }
+    results = await api('/variants/search?q=' + encodeURIComponent(q));
+    $('results').innerHTML = results.map((v, i) => `<div data-i="${i}"><span><b>${esc(v.productName)}</b> ${esc(v.size)} / ${esc(v.colour)}</span>
+      <span class="small muted">${v.stockQty} in stock</span></div>`).join('') || '<div class="muted">No matching items</div>';
+    $('results').querySelectorAll('[data-i]').forEach(d => d.onclick = () => pick(Number(d.dataset.i)));
+    $('results').classList.remove('hidden');
+  }
+  async function pick(i) {
+    const v = results[i];
+    $('results').classList.add('hidden'); $('q').value = '';
+    const [row] = await api('/stock/labels?ids=' + v.id);
+    row.qty = Math.max(1, row.stock_qty);
+    addRows([row]);
+  }
+
+  function addRows(rows) {
+    for (const r of rows) {
+      const ex = items.find(x => x.variant_id === r.variant_id);
+      if (ex) ex.qty += Number(r.qty); else items.push({ ...r, qty: Number(r.qty) });
+    }
+    render();
+  }
+
+  function render() {
+    $('list').innerHTML = items.map((v, i) => `<tr>
+      <td><b>${esc(v.name)}</b><div class="small muted">${esc(v.size)} / ${esc(v.colour)} · ${esc(v.barcode)}</div></td>
+      <td class="num">${rs0(v.selling_price)}</td>
+      <td><input type="number" min="0" max="500" value="${v.qty}" data-q="${i}" style="width:90px"></td>
+      <td class="num"><button class="small ghost" data-del="${i}" aria-label="Remove">✕</button></td></tr>`).join('')
+      || '<tr><td colspan="4" class="empty">Search or scan items to add them.</td></tr>';
+    $('list').querySelectorAll('[data-q]').forEach(inp => inp.onchange = () => { items[inp.dataset.q].qty = Math.max(0, Math.min(500, Number(inp.value) || 0)); render(); });
+    $('list').querySelectorAll('[data-del]').forEach(b => b.onclick = () => { items.splice(Number(b.dataset.del), 1); render(); });
+    const total = items.reduce((s, v) => s + v.qty, 0);
+    const [cols, h] = $('layout').value.split(',');
+    const perSheet = { 5: 65, 4: 40, 3: 24, 2: 14 }[cols];
+    const skip = Math.max(0, Number($('skip').value) || 0);
+    $('total').textContent = total ? `${total} labels · ${Math.ceil((total + skip) / perSheet)} sheet(s)` : '';
+    const sheet = $('sheet');
+    sheet.style.setProperty('--cols', cols);
+    sheet.style.setProperty('--lh', h + 'mm');
+    const compact = Number(h) < 25;
+    sheet.classList.toggle('compact', compact);
+    const one = v => `<div class="blabel">
+      ${$('showShop').checked && shopName && !compact ? `<div class="lshop">${esc(shopName)}</div>` : ''}
+      <div class="ln">${esc(v.name)}</div>
+      ${ean13Svg(v.barcode)}
+      <div class="lp"><span class="lsz">${esc(v.size)} · ${esc(v.colour)}</span><span>${rs0(v.selling_price)}${$('showMrp').checked && Number(v.mrp) > Number(v.selling_price) ? `<s>${rs0(v.mrp)}</s>` : ''}</span></div></div>`;
+    let html = '<div class="blabel" style="visibility:hidden"></div>'.repeat(skip);
+    for (const v of items) html += one(v).repeat(v.qty);
+    sheet.innerHTML = html || `<div style="grid-column:1/-1">${emptyState('The label preview shows here.', 'barcode')}</div>`;
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+# Render "Blueprint": New -> Blueprint -> pick this repository. Render reads this file and creates the web service.
+# Secret values (sync: false) are typed into the Render dashboard once; they are never stored in GitHub.
+services:
+  - type: web
+    name: shop-manager
+    runtime: docker
+    plan: free
+    region: singapore          # same region as the Neon database = faster
+    healthCheckPath: /login.html
+    envVars:
+      - key: DB_HOST
+        sync: false            # Neon host WITHOUT "-pooler"
+      - key: DB_PORT
+        value: "5432"
+      - key: DB_NAME
+        value: neondb
+      - key: DB_USER
+        value: neondb_owner
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_SSL_MODE
+        value: require
+      - key: COOKIE_SECURE
+        value: "true"          # the live link is https
+      - key: DEMO_MODE
+        value: "false"         # hide demo logins; demo passwords must be changed at first login
+      - key: LINK_SECRET
+        generateValue: true    # random secret for WhatsApp e-bill links
+      - key: PUBLIC_BASE_URL
+        sync: false            # e.g. https://shop-manager.onrender.com

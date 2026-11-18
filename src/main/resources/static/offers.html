@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Offers – Shop</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#221a1f">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+</head>
+<body>
+<main class="stack">
+  <div class="page-head">
+    <div><h1>Offers</h1><p class="muted small">Running offers are applied automatically at billing. If two offers fit an item, the bigger discount wins.</p></div>
+    <button class="primary hidden" id="addBtn">+ New offer</button>
+  </div>
+  <div class="tabs" id="tabs">
+    <button data-s="" class="on">All</button><button data-s="RUNNING">Running</button><button data-s="UPCOMING">Upcoming</button>
+    <button data-s="ENDED">Ended</button><button data-s="OFF">Switched off</button>
+  </div>
+  <div class="card flush table-wrap">
+    <table>
+      <thead><tr><th>Offer</th><th>Discount</th><th>On</th><th>From</th><th>To</th><th>Status</th><th class="num">Items sold</th><th></th></tr></thead>
+      <tbody id="body"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</main>
+<script src="js/app.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const BADGE = { RUNNING: 'ok', UPCOMING: 'info', ENDED: 'grey', OFF: 'grey' };
+  let offers = [], filter = '', cats = null, prods = null;
+
+  requireLogin().then(me => {
+    if (me.role === 'OWNER') { $('addBtn').classList.remove('hidden'); $('addBtn').onclick = () => edit(null); }
+    $('tabs').querySelectorAll('button').forEach(b => b.onclick = () => {
+      $('tabs').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+      filter = b.dataset.s; draw();
+    });
+    load();
+  });
+
+  async function load() { offers = await api('/offers'); draw(); }
+
+  function draw() {
+    const rows = offers.filter(o => !filter || o.status === filter);
+    $('body').innerHTML = rows.map(o => `<tr>
+      <td><b>${esc(o.name)}</b></td>
+      <td class="nowrap">${o.type === 'PERCENT' ? pct(o.value) + ' off' : rs0(o.value) + ' off'}</td>
+      <td>${o.product_name ? esc(o.product_name) : o.category_name ? esc(o.category_name) + ' <span class="muted small">(category)</span>' : '<span class="badge brand">Whole shop</span>'}</td>
+      <td class="small nowrap">${fmtDateTime(o.valid_from)}</td><td class="small nowrap">${fmtDateTime(o.valid_to)}</td>
+      <td><span class="badge ${BADGE[o.status]}">${o.status[0] + o.status.slice(1).toLowerCase()}</span></td>
+      <td class="num">${o.times_used}</td>
+      <td class="num">${ME.role === 'OWNER' ? `<button class="small" data-id="${o.offer_id}">Edit</button>` : ''}</td></tr>`).join('')
+      || `<tr><td colspan="8">${emptyState('No offers here yet.', 'percent')}</td></tr>`;
+    document.querySelectorAll('[data-id]').forEach(b => b.onclick = () => edit(offers.find(o => o.offer_id == b.dataset.id)));
+  }
+
+  const local = d => { const z = new Date(d); return new Date(z - z.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
+
+  async function edit(o) {
+    cats = cats || await api('/categories');
+    prods = prods || await api('/products');
+    const now = new Date(); now.setMinutes(0, 0, 0);
+    const scope = !o ? 'shop' : o.product_id ? 'product' : o.category_id ? 'category' : 'shop';
+    const m = openModal(`<h2>${o ? 'Edit offer' : 'New offer'}</h2>
+      <form id="f" autocomplete="off"><div class="form-grid">
+        <div class="field full"><label>Offer name (shown on the bill)</label><input type="text" name="name" maxlength="80" placeholder="Diwali 10% off on Kurtis" value="${esc(o ? o.name : '')}"></div>
+        <div class="field"><label>Type</label><select name="type"><option value="PERCENT">Percent off (%)</option><option value="FLAT">Flat amount off (₹ per piece)</option></select></div>
+        <div class="field"><label>Discount</label><input type="number" name="value" min="1" step="0.01" value="${o ? o.value : ''}"></div>
+        <div class="field full"><label>Applies to</label><div class="tabs" id="scope">
+          <button type="button" data-v="shop">Whole shop</button><button type="button" data-v="category">A category</button><button type="button" data-v="product">One product</button></div></div>
+        <div class="field full hidden" id="catBox"><label>Category</label><select name="categoryId">${cats.filter(c => c.is_active).map(c => `<option value="${c.category_id}">${esc(c.label)}</option>`).join('')}</select>
+          <div class="hint">A main category (e.g. Women) includes all its sub-categories.</div></div>
+        <div class="field full hidden" id="prodBox"><label>Product</label><select name="productId">${prods.map(p => `<option value="${p.product_id}">${esc(p.name)}</option>`).join('')}</select></div>
+        <div class="field"><label>Starts</label><input type="datetime-local" name="validFrom" value="${local(o ? o.valid_from : now)}"></div>
+        <div class="field"><label>Ends</label><input type="datetime-local" name="validTo" value="${local(o ? o.valid_to : new Date(now.getTime() + 7 * 864e5))}"></div>
+        <div class="field full"><label class="checkbox"><input type="checkbox" name="active" ${!o || o.is_active ? 'checked' : ''}> Offer is switched on</label></div>
+      </div><div id="fMsg"></div>
+      <div class="actions"><button type="button" data-close>Cancel</button><button class="primary">Save offer</button></div></form>`);
+    const f = m.el.querySelector('#f');
+    if (o) { f.type.value = o.type; if (o.category_id) f.categoryId.value = o.category_id; if (o.product_id) f.productId.value = o.product_id; }
+    let sc = scope;
+    const setScope = v => {
+      sc = v;
+      m.el.querySelectorAll('#scope button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
+      m.el.querySelector('#catBox').classList.toggle('hidden', v !== 'category');
+      m.el.querySelector('#prodBox').classList.toggle('hidden', v !== 'product');
+    };
+    m.el.querySelectorAll('#scope button').forEach(b => b.onclick = () => setScope(b.dataset.v));
+    setScope(sc);
+    f.onsubmit = async e => {
+      e.preventDefault();
+      const b = formData(f);
+      b.categoryId = sc === 'category' ? Number(b.categoryId) : null;
+      b.productId = sc === 'product' ? Number(b.productId) : null;
+      try {
+        await api(o ? '/offers/' + o.offer_id : '/offers', { method: o ? 'PUT' : 'POST', body: b });
+        m.close(); toast('Offer saved.', 'ok'); load();
+      } catch (err) { formError(f, m.el.querySelector('#fMsg'), err); }
+    };
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Products – Mansi Collection</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#221a1f">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+</head>
+<body>
+<main class="stack">
+  <div class="row between">
+    <h1 style="margin:0">Products</h1>
+    <div class="row">
+      <button class="hidden" id="bulkPhotoBtn" title="Select many photos at once; each is matched to its product by file name">📷 Bulk photos</button>
+      <button class="hidden" id="importBtn">Import CSV / Excel</button>
+      <a class="btn primary hidden" id="addBtn" href="product-edit.html">+ Add product</a>
+    </div>
+  </div>
+  <div class="card row">
+    <input type="search" id="q" placeholder="Search name, brand, category, SKU or barcode" class="grow" style="width:auto;min-width:240px">
+    <select id="cat" style="width:auto;min-width:200px"><option value="">All categories</option></select>
+    <span class="muted small" id="count"></span>
+  </div>
+  <div class="card table-wrap">
+    <table>
+      <thead><tr><th>Product</th><th>Category</th><th class="gst-col">GST class</th><th class="num">Variants</th><th class="num">Stock</th><th class="num">Price</th><th></th></tr></thead>
+      <tbody id="body"></tbody>
+    </table>
+  </div>
+</main>
+<script src="js/app.js"></script>
+<script src="js/share.js"></script>
+<script src="js/import.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  requireLogin().then(async me => {
+    if (me.role === 'OWNER') {
+      $('addBtn').classList.remove('hidden');
+      $('importBtn').classList.remove('hidden');
+      $('importBtn').onclick = openImport;
+      $('bulkPhotoBtn').classList.remove('hidden');
+      $('bulkPhotoBtn').onclick = bulkPhotos;
+    }
+    const cats = await api('/categories');
+    $('cat').innerHTML += cats.map(c => `<option value="${c.category_id}">${esc(c.label)}</option>`).join('');
+    $('q').addEventListener('input', debounce(load, 250));
+    $('cat').onchange = load;
+    load();
+  });
+
+  // Owner: add or change a product photo straight from the list (phone: opens the camera or gallery).
+  function quickPhoto(productId, btn) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async () => {
+      if (!input.files[0]) return;
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      try {
+        await uploadProductPhoto(productId, input.files[0]);
+        const img = btn.closest('tr').querySelector('img[data-pid]');
+        img.classList.remove('missing');
+        img.src = `${API}/products/${productId}/image?size=thumb&t=${Date.now()}`;
+        toast('Photo saved', 'ok');
+      } catch (err) {
+        toast((err.code ? err.code + ' ' : '') + err.message, 'err');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '📷 Photo';
+      }
+    };
+    input.click();
+  }
+
+  // Owner: select many photos at once. Each file is matched to a product by its name:
+  // "9.jpg" -> product 9, or "Banarasi Silk Saree.jpg" -> the product with that name.
+  async function bulkPhotos() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.multiple = true;
+    input.onchange = async () => {
+      const files = [...input.files];
+      if (!files.length) return;
+      const all = await api('/products?includeInactive=true');
+      const norm = s => s.toLowerCase().replace(/\.[^.]+$/, '').replace(/[^a-z0-9]+/g, ' ').trim();
+      const byName = new Map(all.map(p => [norm(p.name), p]));
+      const byId = new Map(all.map(p => [String(p.product_id), p]));
+      const plan = files.map(f => {
+        const base = f.name.replace(/\.[^.]+$/, '').trim();
+        const num = (base.match(/^(\d+)/) || [])[1];
+        return { file: f, product: (num && byId.get(num)) || byName.get(norm(base)) || null };
+      });
+      const ok = plan.filter(x => x.product), missing = plan.filter(x => !x.product);
+      const m = openModal(`<h2>Bulk photos</h2>
+        <p class="small muted">Files are matched by name: <code>9.jpg</code> → product 9, or <code>Banarasi Silk Saree.jpg</code> → that product.</p>
+        <div class="table-wrap" style="max-height:50vh;overflow-y:auto"><table><tbody>
+          ${plan.map((x, i) => `<tr><td>${esc(x.file.name)}</td><td>${x.product ? '→ <b>' + esc(x.product.name) + '</b>' : '<span class="badge err">no matching product</span>'}</td>
+            <td id="bp${i}" class="small"></td></tr>`).join('')}
+        </tbody></table></div>
+        <div class="actions"><button data-close>Close</button>
+          <button class="primary" id="bpGo" ${ok.length ? '' : 'disabled'}>Upload ${ok.length} photo${ok.length === 1 ? '' : 's'}</button></div>`, { wide: true });
+      m.el.querySelector('#bpGo').onclick = async () => {
+        const go = m.el.querySelector('#bpGo');
+        go.disabled = true;
+        let done = 0, failed = 0;
+        for (let i = 0; i < plan.length; i++) {
+          if (!plan[i].product) continue;
+          const cell = m.el.querySelector('#bp' + i);
+          cell.textContent = 'uploading…';
+          try {
+            await uploadProductPhoto(plan[i].product.product_id, plan[i].file);
+            cell.innerHTML = '<span class="badge ok">saved</span>';
+            done++;
+          } catch (err) {
+            cell.innerHTML = '<span class="badge err">' + esc(err.code || 'error') + '</span> ' + esc(err.message);
+            failed++;
+          }
+          go.textContent = `Uploading… ${done + failed}/${ok.length}`;
+        }
+        go.textContent = `Done: ${done} saved${failed ? ', ' + failed + ' failed' : ''}`;
+        toast(`${done} photos saved` + (missing.length ? `, ${missing.length} files had no matching product` : ''), failed ? 'warn' : 'ok');
+        load();
+      };
+    };
+    input.click();
+  }
+
+  async function load() {
+    const params = new URLSearchParams();
+    if ($('q').value.trim()) params.set('q', $('q').value.trim());
+    if ($('cat').value) params.set('categoryId', $('cat').value);
+    const rows = await api('/products?' + params);
+    $('count').textContent = rows.length + ' products';
+    $('body').innerHTML = rows.map(p => `<tr class="clickable" data-id="${p.product_id}">
+      <td><div class="with-thumb">${productImg(p.product_id)}<div><b>${esc(p.name)}</b><div class="small muted">${esc(p.brand || '')}${p.hsn_code ? ' · HSN ' + esc(p.hsn_code) : ''}
+        ${p.is_returnable ? '' : ' · <span class="badge grey">Non-returnable</span>'}</div></div></div></td>
+      <td>${esc(p.parent_category ? p.parent_category + ' › ' : '')}${esc(p.category)}</td>
+      <td class="gst-col">${p.tax_class === 'FABRIC' ? '<span class="badge info">FABRIC 5%</span>' : '<span class="badge grey">APPAREL</span>'}</td>
+      <td class="num">${p.variant_count}</td>
+      <td class="num">${p.total_stock}${p.low_variants > 0 ? ' <span class="badge warn" title="variants at or below reorder level">' + p.low_variants + ' low</span>' : ''}</td>
+      <td class="num">${p.min_price === p.max_price ? rs0(p.min_price) : rs0(p.min_price) + '–' + rs0(p.max_price)}</td>
+      <td class="num" style="white-space:nowrap">${ME.role === 'OWNER' ? `<button class="small" data-photo="${p.product_id}" title="Add or change photo">📷 Photo</button> ` : ''}<button class="small whatsapp" data-share="${p.product_id}">Share</button></td></tr>`).join('')
+      || '<tr><td colspan="7" class="muted">No products found</td></tr>';
+    $('body').querySelectorAll('tr[data-id]').forEach(r => r.onclick = e => {
+      if (e.target.closest('[data-share], [data-photo]')) return;
+      location.href = 'product-edit.html?id=' + r.dataset.id;
+    });
+    $('body').querySelectorAll('[data-share]').forEach(b => b.onclick = () => openShare(+b.dataset.share));
+    $('body').querySelectorAll('[data-photo]').forEach(b => b.onclick = () => quickPhoto(+b.dataset.photo, b));
+    const gst = (await shopSettings()).gstRegistered;
+    document.querySelectorAll('.gst-col').forEach(e => e.classList.toggle('hidden', !gst));
+  }
+</script>
+</body>
+</html>

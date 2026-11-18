@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Suppliers – Shop</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#221a1f">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+</head>
+<body>
+<main class="stack">
+  <div class="page-head">
+    <div><h1>Suppliers</h1><p class="muted small">Wholesalers you buy stock from. Choose them on the Stock-in screen.</p></div>
+    <div class="row tight"><a class="btn" href="stock-in.html">Stock-in</a><button class="primary" id="addBtn">+ New supplier</button></div>
+  </div>
+  <div class="card flush table-wrap">
+    <table>
+      <thead><tr><th>Name</th><th>Phone</th><th>GSTIN</th><th class="num">Purchases</th><th>Last purchase</th><th></th></tr></thead>
+      <tbody id="body"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</main>
+<script src="js/app.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  let rows = [];
+  requireLogin(['OWNER']).then(() => { $('addBtn').onclick = () => edit(null); load(); });
+
+  async function load() {
+    rows = await api('/suppliers');
+    $('body').innerHTML = rows.map(s => `<tr>
+      <td><b>${esc(s.name)}</b></td>
+      <td>${s.phone ? `<a href="tel:${esc(s.phone)}">${esc(s.phone)}</a>` : '<span class="muted">—</span>'}</td>
+      <td class="code">${esc(s.gstin || '')}</td>
+      <td class="num">${s.purchases}</td>
+      <td>${s.last_purchase ? fmtDate(s.last_purchase) : '<span class="muted">—</span>'}</td>
+      <td class="num"><button class="small" data-id="${s.id}">Edit</button></td></tr>`).join('')
+      || `<tr><td colspan="6">${emptyState('No suppliers yet.', 'building')}</td></tr>`;
+    document.querySelectorAll('[data-id]').forEach(b => b.onclick = () => edit(rows.find(s => s.id == b.dataset.id)));
+  }
+
+  function edit(s) {
+    const m = openModal(`<h2>${s ? 'Edit supplier' : 'New supplier'}</h2>
+      <form id="f" autocomplete="off">
+        <div class="field"><label>Name</label><input type="text" name="name" maxlength="80" value="${esc(s ? s.name : '')}"></div>
+        <div class="form-grid">
+          <div class="field"><label>Phone <span class="muted">(optional)</span></label><input type="tel" name="phone" maxlength="10" value="${esc(s ? s.phone || '' : '')}"></div>
+          <div class="field"><label>GSTIN <span class="muted">(optional)</span></label><input type="text" name="gstin" maxlength="15" style="text-transform:uppercase" value="${esc(s ? s.gstin || '' : '')}"></div>
+        </div>
+        <div id="fMsg"></div>
+        <div class="actions"><button type="button" data-close>Cancel</button><button class="primary">Save</button></div></form>`);
+    const f = m.el.querySelector('#f');
+    f.querySelector('[name=name]').focus();
+    f.onsubmit = async e => {
+      e.preventDefault();
+      try {
+        await api(s ? '/suppliers/' + s.id : '/suppliers', { method: s ? 'PUT' : 'POST', body: formData(f) });
+        m.close(); toast('Saved.', 'ok'); load();
+      } catch (err) { formError(f, m.el.querySelector('#fMsg'), err); }
+    };
+  }
+</script>
+</body>
+</html>

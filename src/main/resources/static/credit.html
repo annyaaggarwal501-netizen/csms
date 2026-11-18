@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Credit (udhaar) – Shop</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#221a1f">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+</head>
+<body>
+<main class="stack">
+  <div class="page-head">
+    <div><h1>Credit (udhaar)</h1><p class="muted small">Customers who bought on credit. When they pay, click <b>Receive payment</b>.</p></div>
+    <button id="csv">Excel (CSV)</button>
+  </div>
+  <div class="grid kpis" id="kpis"></div>
+  <div class="grid side">
+    <div class="card flush table-wrap">
+      <table>
+        <thead><tr><th>Customer</th><th>Mobile</th><th class="num">Due</th><th class="num">Limit</th><th>Last credit</th><th>Last payment</th></tr></thead>
+        <tbody id="body"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="card" id="detail"></div>
+  </div>
+</main>
+<script src="js/app.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  let rows = [], selected = null;
+  $('detail').innerHTML = emptyState('Choose a customer to see their credit history.', 'wallet');
+
+  requireLogin().then(() => {
+    $('csv').onclick = () => downloadCsv('credit_dues_' + isoDate(new Date()) + '.csv', [
+      ['name', 'Customer'], ['mobile', 'Mobile'], ['area', 'Area'], ['credit_due', 'Due'], ['credit_limit', 'Limit'],
+      [r => r.last_credit ? fmtDate(r.last_credit) : '', 'Last credit'], [r => r.last_payment ? fmtDate(r.last_payment) : '', 'Last payment']], rows);
+    load().then(() => { if (param('id')) show(Number(param('id'))); });
+  });
+
+  async function load() {
+    rows = await api('/customers/credit-dues');
+    const total = rows.reduce((s, r) => s + Number(r.credit_due), 0);
+    const over = rows.filter(r => Number(r.credit_due) > Number(r.credit_limit)).length;
+    const old = rows.filter(r => r.last_credit && (Date.now() - new Date(r.last_credit)) > 30 * 864e5).length;
+    $('kpis').innerHTML = `<div class="card kpi accent"><div class="label">Total to collect</div><div class="value">${rs0(total)}</div><div class="sub">${rows.length} customers</div></div>
+      <div class="card kpi"><div class="label">Over their limit</div><div class="value">${over}</div><div class="sub">customers</div></div>
+      <div class="card kpi"><div class="label">Older than 30 days</div><div class="value">${old}</div><div class="sub">since last credit bill</div></div>`;
+    $('body').innerHTML = rows.map(r => `<tr class="clickable ${selected === r.customer_id ? 'selected' : ''}" data-id="${r.customer_id}">
+      <td><b>${esc(r.name)}</b>${r.area ? `<div class="small muted">${esc(r.area)}</div>` : ''}</td>
+      <td>${esc(r.mobile)}</td>
+      <td class="num"><b style="color:${Number(r.credit_due) > Number(r.credit_limit) ? 'var(--err)' : 'inherit'}">${rs(r.credit_due)}</b></td>
+      <td class="num muted">${rs0(r.credit_limit)}</td>
+      <td class="small">${r.last_credit ? fmtDate(r.last_credit) : '—'}</td><td class="small">${r.last_payment ? fmtDate(r.last_payment) : '—'}</td></tr>`).join('')
+      || `<tr><td colspan="6">${emptyState('Nobody owes money right now.', 'wallet')}</td></tr>`;
+    document.querySelectorAll('tr[data-id]').forEach(tr => tr.onclick = () => show(Number(tr.dataset.id)));
+  }
+
+  const TYPE = { SALE: ['Credit bill', 'warn'], REPAYMENT: ['Paid', 'ok'], VOID: ['Bill voided', 'grey'] };
+
+  async function show(id) {
+    selected = id;
+    document.querySelectorAll('tr[data-id]').forEach(tr => tr.classList.toggle('selected', Number(tr.dataset.id) === id));
+    const [c, ledger] = await Promise.all([api('/customers/' + id), api(`/customers/${id}/credit`)]);
+    $('detail').innerHTML = `<div class="row between"><div><h2 style="margin:0">${esc(c.name)}</h2><div class="muted small">${esc(c.mobile)}</div></div>
+        <a class="btn small" href="tel:${esc(c.mobile)}">Call</a></div>
+      <div style="margin:.9rem 0"><div class="muted small">Due now</div><div style="font-size:1.8rem;font-weight:800">${rs(c.creditDue)}</div>
+        <div class="small muted">Limit ${rs0(c.creditLimit)}</div></div>
+      ${Number(c.creditDue) > 0 ? '<button class="primary" id="pay" style="width:100%">Receive payment</button>' : ''}
+      <h3 style="margin-top:1.2rem">History</h3>
+      <table><tbody>${ledger.map(t => { const ty = TYPE[t.type]; return `<tr>
+        <td><span class="badge ${ty[1]}">${ty[0]}</span><div class="small muted">${fmtDateTime(t.created_at)} · ${esc(t.user_name)}</div>
+          ${t.invoice_no ? `<div class="small"><a href="receipt.html?id=${t.sale_id}" target="_blank">${esc(t.invoice_no)}</a></div>` : ''}
+          ${t.mode ? `<div class="small">${esc(t.mode)}${t.note ? ' · ' + esc(t.note) : ''}</div>` : ''}</td>
+        <td class="num"><b>${t.type === 'SALE' ? '+' : '−'}${rs(t.amount)}</b><div class="small muted">bal ${rs0(t.balance_after)}</div></td></tr>`; }).join('')
+        || '<tr><td class="muted small">No credit history yet.</td></tr>'}</tbody></table>`;
+    const b = document.getElementById('pay');
+    if (b) b.onclick = () => repay(c);
+  }
+
+  function repay(c) {
+    const m = openModal(`<h2>Receive payment – ${esc(c.name)}</h2>
+      <p class="muted" style="margin-top:-.4rem">Due ${rs(c.creditDue)}</p>
+      <form id="f">
+        <div class="form-grid">
+          <div class="field"><label>Amount received (₹)</label><input type="number" name="amount" min="1" step="0.01" max="${c.creditDue}" value="${c.creditDue}"></div>
+          <div class="field"><label>Paid by</label><select name="mode"><option value="CASH">Cash</option><option value="UPI">UPI</option><option value="CARD">Card</option></select></div>
+          <div class="field full"><label>Note <span class="muted">(optional)</span></label><input type="text" name="note" maxlength="150"></div>
+        </div>
+        <div id="fMsg"></div>
+        <div class="actions"><button type="button" data-close>Cancel</button><button class="primary">Save payment</button></div></form>`);
+    const f = m.el.querySelector('#f');
+    f.amount.select();
+    f.onsubmit = async e => {
+      e.preventDefault();
+      try {
+        const r = await api(`/customers/${c.id}/credit/repay`, { method: 'POST', body: formData(f) });
+        m.close(); toast(`Payment saved. ${c.name} now owes ${rs(r.creditDue)}.`, 'ok');
+        await load(); show(c.id);
+      } catch (err) { formError(f, m.el.querySelector('#fMsg'), err); }
+    };
+  }
+</script>
+</body>
+</html>

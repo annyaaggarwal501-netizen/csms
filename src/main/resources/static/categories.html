@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Categories – Shop</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#221a1f">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+</head>
+<body>
+<main class="stack narrow">
+  <div class="page-head">
+    <div><h1>Categories</h1><p class="muted small">Two levels: a main group (e.g. Women) and its types (e.g. Kurtis, Sarees).</p></div>
+    <button class="primary" id="addBtn">+ New category</button>
+  </div>
+  <div id="list" class="stack"></div>
+</main>
+<script src="js/app.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  let cats = [];
+  requireLogin(['OWNER']).then(() => { $('addBtn').onclick = () => edit(null); load(); });
+
+  async function load() {
+    cats = await api('/categories?all=true');
+    const tops = cats.filter(c => !c.parent_id);
+    $('list').innerHTML = tops.map(t => {
+      const kids = cats.filter(c => c.parent_id === t.category_id);
+      return `<div class="card flush">
+        <div class="card-head row between" style="padding:.9rem 1.2rem">
+          <div><b style="font-size:1.05rem">${esc(t.name)}</b> ${t.is_active ? '' : '<span class="badge grey">Hidden</span>'}
+            <span class="muted small">· ${t.products} products directly</span></div>
+          <div class="row tight"><button class="small" data-add="${t.category_id}">+ Sub-category</button><button class="small" data-id="${t.category_id}">Edit</button></div>
+        </div>
+        ${kids.length ? `<table><tbody>${kids.map(k => `<tr><td style="padding-left:2rem">${esc(k.name)} ${k.is_active ? '' : '<span class="badge grey">Hidden</span>'}</td>
+          <td class="num muted small">${k.products} products</td><td class="num" style="width:80px"><button class="small" data-id="${k.category_id}">Edit</button></td></tr>`).join('')}</tbody></table>` : ''}
+      </div>`;
+    }).join('') || emptyState('No categories yet.', 'folder');
+    document.querySelectorAll('[data-id]').forEach(b => b.onclick = () => edit(cats.find(c => c.category_id == b.dataset.id)));
+    document.querySelectorAll('[data-add]').forEach(b => b.onclick = () => edit(null, Number(b.dataset.add)));
+  }
+
+  function edit(c, parentId) {
+    const tops = cats.filter(x => !x.parent_id && (!c || x.category_id !== c.category_id));
+    const m = openModal(`<h2>${c ? 'Edit category' : 'New category'}</h2>
+      <form id="f" autocomplete="off">
+        <div class="field"><label>Name</label><input type="text" name="name" maxlength="50" value="${esc(c ? c.name : '')}"></div>
+        <div class="field"><label>Inside</label><select name="parentId"><option value="">— Main group (top level) —</option>
+          ${tops.map(t => `<option value="${t.category_id}">${esc(t.name)}</option>`).join('')}</select></div>
+        <label class="checkbox"><input type="checkbox" name="active" ${!c || c.is_active ? 'checked' : ''}> Show this category</label>
+        <div id="fMsg" style="margin-top:.6rem"></div>
+        <div class="actions"><button type="button" data-close>Cancel</button><button class="primary">Save</button></div></form>`);
+    const f = m.el.querySelector('#f');
+    f.parentId.value = (c ? c.parent_id : parentId) || '';
+    f.querySelector('[name=name]').focus();
+    f.onsubmit = async e => {
+      e.preventDefault();
+      const b = formData(f);
+      b.parentId = b.parentId ? Number(b.parentId) : null;
+      try {
+        await api(c ? '/categories/' + c.category_id : '/categories', { method: c ? 'PUT' : 'POST', body: b });
+        m.close(); toast('Saved.', 'ok'); load();
+      } catch (err) { formError(f, m.el.querySelector('#fMsg'), err); }
+    };
+  }
+</script>
+</body>
+</html>

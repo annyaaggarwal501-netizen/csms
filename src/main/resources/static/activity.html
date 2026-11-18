@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Activity log – Shop</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#221a1f">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+</head>
+<body>
+<main class="stack">
+  <div class="page-head">
+    <div><h1>Activity log</h1><p class="muted small">Who did what and when: logins, price changes, voids, stock corrections, settings. Nobody can edit this list.</p></div>
+    <div class="row tight">
+      <select id="action" style="width:auto"><option value="">Everything</option></select>
+      <button id="csv">Excel (CSV)</button>
+    </div>
+  </div>
+  <div class="card flush table-wrap">
+    <table>
+      <thead><tr><th>When</th><th>Who</th><th>What</th><th>Details</th><th>From</th></tr></thead>
+      <tbody id="body"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</main>
+<script src="js/app.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const ACTIONS = {
+    LOGIN: ['Logged in', 'grey'], LOGIN_FAILED: ['Wrong password', 'warn'], LOGIN_BLOCKED: ['Login blocked', 'err'], ACCOUNT_LOCKED: ['Account locked', 'err'],
+    PASSWORD_CHANGED: ['Changed password', 'grey'], PIN_CHANGED: ['Changed Owner PIN', 'warn'], USER_CREATED: ['Added login', 'info'],
+    USER_UPDATED: ['Changed login', 'info'], PASSWORD_RESET: ['Reset password', 'warn'], USER_UNLOCKED: ['Unlocked login', 'info'],
+    PRODUCT_ADDED: ['Added product', 'ok'], PRICE_CHANGED: ['Changed price', 'warn'], STOCK_ADJUSTED: ['Adjusted stock', 'warn'],
+    BILL_VOIDED: ['Voided bill', 'err'], DISCOUNT_OVERRIDE: ['Big discount (PIN)', 'warn'], CREDIT_REPAID: ['Credit paid back', 'ok'],
+    WA_CONSENT_ON: ['WhatsApp consent', 'ok'], WA_CONSENT_OFF: ['WhatsApp consent off', 'grey'], SETTINGS_CHANGED: ['Changed settings', 'info'],
+    OFFER_CREATED: ['New offer', 'info'], OFFER_UPDATED: ['Changed offer', 'info'], CATEGORY_CREATED: ['New category', 'info'],
+    CATEGORY_UPDATED: ['Changed category', 'info'], SUPPLIER_CREATED: ['New supplier', 'info'], SUPPLIER_UPDATED: ['Changed supplier', 'info'],
+  };
+  let rows = [];
+  requireLogin(['OWNER']).then(() => {
+    $('action').innerHTML += Object.entries(ACTIONS).map(([k, v]) => `<option value="${k}">${v[0]}</option>`).join('');
+    $('action').onchange = load;
+    $('csv').onclick = () => downloadCsv('activity_' + isoDate(new Date()) + '.csv', [[r => fmtDateTime(r.created_at), 'When'],
+      ['username', 'Who'], [r => (ACTIONS[r.action] || [r.action])[0], 'What'], ['details', 'Details'], ['ip', 'From']], rows);
+    load();
+  });
+  async function load() {
+    const a = $('action').value;
+    rows = await api('/audit?limit=500' + (a ? '&action=' + a : ''));
+    $('body').innerHTML = rows.map(r => { const t = ACTIONS[r.action] || [r.action, 'grey']; return `<tr>
+      <td class="small nowrap">${fmtDateTime(r.created_at)}</td><td>${esc(r.username || '—')}</td>
+      <td><span class="badge ${t[1]}">${esc(t[0])}</span></td><td class="small">${esc(r.details || '')}</td>
+      <td class="small muted">${esc(r.ip || '')}</td></tr>`; }).join('')
+      || `<tr><td colspan="5">${emptyState('Nothing recorded yet.', 'history')}</td></tr>`;
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>My account – Shop</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#221a1f">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+</head>
+<body>
+<main class="stack narrow">
+  <div class="page-head"><div><h1>My account</h1><p class="muted" id="who"></p></div></div>
+  <div id="first" class="msg warn hidden"><b>Welcome!</b> You logged in with a temporary password. Please choose your own password to continue.</div>
+
+  <form class="card" id="pwForm" autocomplete="off">
+    <h2>Change password</h2>
+    <div class="form-grid">
+      <div class="field full"><label>Current password</label><input type="password" name="currentPassword" autocomplete="current-password" required></div>
+      <div class="field"><label>New password</label><input type="password" name="newPassword" autocomplete="new-password" required>
+        <div class="hint">At least 8 characters with a letter and a number.</div></div>
+      <div class="field"><label>Type new password again</label><input type="password" name="again" autocomplete="new-password" required></div>
+    </div>
+    <div id="pwMsg"></div>
+    <button class="primary" style="margin-top:.6rem">Save new password</button>
+  </form>
+
+  <form class="card hidden" id="pinForm" autocomplete="off">
+    <h2>Owner PIN</h2>
+    <p class="muted small" style="margin-top:0">Staff ask for this PIN to approve a big discount, a late return or a void. Keep it secret.</p>
+    <div class="form-grid">
+      <div class="field"><label>Your password</label><input type="password" name="currentPassword" required></div>
+      <div class="field"><label>New PIN (4-6 digits)</label><input type="password" name="newPin" inputmode="numeric" maxlength="6" required></div>
+    </div>
+    <div id="pinMsg"></div>
+    <button class="primary" style="margin-top:.6rem">Change PIN</button>
+  </form>
+</main>
+<script src="js/app.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  requireLogin().then(me => {
+    $('who').textContent = `${me.fullName} · username ${me.username} · ${me.role === 'OWNER' ? 'Owner' : 'Sales staff'}`;
+    if (me.mustChangePassword) $('first').classList.remove('hidden');
+    if (me.role === 'OWNER') $('pinForm').classList.remove('hidden');
+    $('pwForm').onsubmit = async e => {
+      e.preventDefault();
+      const f = formData($('pwForm'));
+      if (f.newPassword !== f.again) { showError($('pwMsg'), { message: 'The two new passwords are not the same.' }); return; }
+      try {
+        await api('/auth/change-password', { method: 'POST', body: { currentPassword: f.currentPassword, newPassword: f.newPassword } });
+        $('pwForm').reset();
+        $('pwMsg').innerHTML = '<div class="msg ok">Password changed.</div>';
+        if (me.mustChangePassword) setTimeout(() => location.href = homeFor(me), 800);
+      } catch (err) { formError($('pwForm'), $('pwMsg'), err); }
+    };
+    $('pinForm').onsubmit = async e => {
+      e.preventDefault();
+      try {
+        await api('/auth/change-pin', { method: 'POST', body: formData($('pinForm')) });
+        $('pinForm').reset();
+        $('pinMsg').innerHTML = '<div class="msg ok">Owner PIN changed.</div>';
+      } catch (err) { formError($('pinForm'), $('pinMsg'), err); }
+    };
+  });
+</script>
+</body>
+</html>

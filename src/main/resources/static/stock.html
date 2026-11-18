@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Stock – Shop</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#221a1f">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+</head>
+<body>
+<main class="stack">
+  <div class="page-head">
+    <div><h1>Stock</h1><p class="muted small">Every piece in and out is recorded. Click a row to see its history.</p></div>
+    <div class="row tight"><button id="csv">Excel (CSV)</button><a class="btn" href="labels.html">Print labels</a><a class="btn primary owner-only hidden" href="stock-in.html">+ Stock-in</a></div>
+  </div>
+  <div class="grid kpis" id="kpis"></div>
+  <div class="card row">
+    <div class="tabs" id="tabs"><button data-f="all" class="on">All</button><button data-f="low">Low</button><button data-f="out">Out of stock</button></div>
+    <select id="cat" style="width:auto;min-width:180px"><option value="">All categories</option></select>
+    <input type="search" id="q" class="grow" style="width:auto" placeholder="Search name, SKU, colour or scan barcode">
+  </div>
+  <div class="card flush table-wrap">
+    <table>
+      <thead><tr><th>Item</th><th>Size / colour</th><th>SKU</th><th class="num">Price</th><th class="num owner-only hidden">Cost</th>
+        <th class="num">In stock</th><th class="num owner-only hidden">Value (cost)</th><th class="owner-only hidden"></th></tr></thead>
+      <tbody id="body"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+  <div class="muted small" id="count"></div>
+</main>
+<script src="js/app.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  let rows = [], filter = 'all', reasons = [];
+  document.getElementById('csv').innerHTML = icon('download') + ' Excel (CSV)';
+
+  requireLogin().then(async me => {
+    if (me.role === 'OWNER') document.querySelectorAll('.owner-only').forEach(e => e.classList.remove('hidden'));
+    const cats = await api('/categories');
+    $('cat').innerHTML += cats.map(c => `<option value="${c.category_id}">${esc(c.label)}</option>`).join('');
+    $('tabs').querySelectorAll('button').forEach(b => b.onclick = () => {
+      $('tabs').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+      filter = b.dataset.f; load();
+    });
+    if (param('filter')) $('tabs').querySelector(`[data-f="${param('filter')}"]`)?.click();
+    $('cat').onchange = load;
+    $('q').addEventListener('input', debounce(load, 300));
+    $('csv').onclick = () => downloadCsv('stock_' + isoDate(new Date()) + '.csv', [
+      ['name', 'Item'], ['size', 'Size'], ['colour', 'Colour'], ['sku', 'SKU'], ['barcode', 'Barcode'], ['category', 'Category'],
+      ['selling_price', 'Price'], ...(ME.role === 'OWNER' ? [['cost_price', 'Cost']] : []), ['stock_qty', 'In stock'],
+      ['reorder_level', 'Reorder level'], ...(ME.role === 'OWNER' ? [['stock_value', 'Value at cost']] : [])], rows);
+    reasons = me.role === 'OWNER' ? await api('/stock/reasons') : [];
+    summary(); load();
+  });
+
+  async function summary() {
+    const s = await api('/stock/summary');
+    const k = (label, value, sub = '', cls = '') => `<div class="card kpi ${cls}"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+    $('kpis').innerHTML = k('Pieces in shop', inr0.format(s.pieces), s.variants + ' sizes/colours')
+      + k('Low stock', s.low_stock, 'at or below reorder level') + k('Out of stock', s.out_of_stock, 'sizes/colours at 0')
+      + (s.value_at_cost != null ? k('Stock value', rs0(s.value_at_cost), 'at cost · ' + rs0(s.value_at_price) + ' at price', 'accent') : '');
+  }
+
+  async function load() {
+    const qs = new URLSearchParams({ filter, q: $('q').value.trim() });
+    if ($('cat').value) qs.set('categoryId', $('cat').value);
+    rows = await api('/stock?' + qs);
+    const owner = ME.role === 'OWNER';
+    $('body').innerHTML = rows.map(v => `<tr class="clickable" data-id="${v.variant_id}">
+      <td><span class="with-thumb">${productImg(v.product_id, 'thumb sm')}<span><b>${esc(v.name)}</b><div class="small muted">${esc(v.category)}</div></span></span></td>
+      <td>${esc(v.size)} / ${esc(v.colour)}</td><td class="code small">${esc(v.sku)}</td>
+      <td class="num">${rs0(v.selling_price)}</td>
+      ${owner ? `<td class="num">${rs0(v.cost_price)}</td>` : ''}
+      <td class="num">${stockBadge(v)}</td>
+      ${owner ? `<td class="num">${rs0(v.stock_value)}</td><td class="num"><button class="small" data-adj="${v.variant_id}">Adjust</button></td>` : ''}</tr>`).join('')
+      || `<tr><td colspan="8">${emptyState('Nothing found.', 'box')}</td></tr>`;
+    $('count').textContent = rows.length >= 1000 ? 'Showing the first 1,000 – search to narrow down.' : rows.length + ' sizes/colours';
+    document.querySelectorAll('tr[data-id]').forEach(tr => tr.onclick = e => {
+      if (e.target.closest('[data-adj]')) return;
+      history(rows.find(v => v.variant_id == tr.dataset.id));
+    });
+    document.querySelectorAll('[data-adj]').forEach(b => b.onclick = () => adjust(rows.find(v => v.variant_id == b.dataset.adj)));
+  }
+
+  const TYPE = { PURCHASE: ['Stock-in', 'ok'], SALE: ['Sold', 'brand'], RETURN: ['Returned', 'info'], ADJUSTMENT: ['Adjusted', 'warn'],
+                 VOID: ['Bill voided', 'grey'], OPENING: ['Opening stock', 'grey'] };
+
+  async function history(v) {
+    const m = openModal(`<h2>${esc(v.name)} · ${esc(v.size)} / ${esc(v.colour)}</h2>
+      <p class="muted small" style="margin-top:-.5rem">${esc(v.sku)} · now <b>${v.stock_qty}</b> in stock</p>
+      <div class="table-wrap" style="max-height:60vh;overflow-y:auto" id="h"><div class="muted">Loading…</div></div>
+      <div class="actions"><button data-close>Close</button></div>`, { wide: true });
+    const rows = await api(`/stock/${v.variant_id}/movements`);
+    m.el.querySelector('#h').innerHTML = `<table><thead><tr><th>When</th><th>What</th><th>Ref</th><th class="num">Change</th><th class="num">Balance</th><th>By</th></tr></thead>
+      <tbody>${rows.map(r => { const t = TYPE[r.type] || [r.type, 'grey']; return `<tr>
+        <td class="small nowrap">${fmtDateTime(r.created_at)}</td>
+        <td><span class="badge ${t[1]}">${t[0]}</span>${r.reason && r.type === 'ADJUSTMENT' ? `<div class="small muted">${esc(r.reason)}</div>` : ''}</td>
+        <td class="small">${esc(r.ref_label || '')}</td>
+        <td class="num" style="color:${r.qty_change < 0 ? 'var(--err)' : 'var(--ok)'};font-weight:700">${r.qty_change > 0 ? '+' : ''}${r.qty_change}</td>
+        <td class="num">${r.balance}</td><td class="small">${esc(r.user_name)}</td></tr>`; }).join('')
+        || '<tr><td colspan="6" class="empty">No movements yet.</td></tr>'}</tbody></table>`;
+  }
+
+  function adjust(v) {
+    const m = openModal(`<h2>Adjust stock</h2>
+      <p class="muted" style="margin-top:-.4rem">${esc(v.name)} · ${esc(v.size)} / ${esc(v.colour)} · now <b>${v.stock_qty}</b> in stock</p>
+      <form id="f">
+        <div class="form-grid">
+          <div class="field"><label>Change</label><div class="tabs" id="dir"><button type="button" data-d="-1" class="on">Remove (−)</button><button type="button" data-d="1">Add (+)</button></div></div>
+          <div class="field"><label>Pieces</label><input type="number" name="qty" min="1" max="9999" value="1"></div>
+          <div class="field full"><label>Reason</label><select name="reason">${reasons.map(r => `<option>${esc(r)}</option>`).join('')}</select></div>
+          <div class="field full"><label>Note <span class="muted">(needed for "Other")</span></label><input type="text" name="note" maxlength="80"></div>
+        </div>
+        <div class="msg info small" id="after"></div>
+        <div id="fMsg" style="margin-top:.5rem"></div>
+        <div class="actions"><button type="button" data-close>Cancel</button><button class="primary">Save adjustment</button></div></form>`);
+    const f = m.el.querySelector('#f');
+    let dir = -1;
+    const upd = () => m.el.querySelector('#after').innerHTML = `Stock will become <b>${v.stock_qty + dir * (Number(f.qty.value) || 0)}</b>.`;
+    m.el.querySelectorAll('#dir button').forEach(b => b.onclick = () => {
+      dir = Number(b.dataset.d); m.el.querySelectorAll('#dir button').forEach(x => x.classList.toggle('on', x === b)); upd();
+    });
+    f.qty.oninput = upd; upd();
+    f.onsubmit = async e => {
+      e.preventDefault();
+      try {
+        const r = await api('/stock/adjustments', { method: 'POST', body: {
+          variantId: v.variant_id, qtyChange: dir * Number(f.qty.value), reason: f.reason.value, note: f.note.value } });
+        m.close(); toast(`Stock changed ${r.stockBefore} → ${r.stockAfter}.`, 'ok'); load(); summary();
+      } catch (err) { formError(f, m.el.querySelector('#fMsg'), err); }
+    };
+  }
+</script>
+</body>
+</html>

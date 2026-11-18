@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Settings – Shop</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#221a1f">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+</head>
+<body>
+<main class="stack narrow">
+  <div class="page-head"><div><h1>Settings</h1><p class="muted small">Shop details print on every bill. Rules apply to every counter at once.</p></div></div>
+
+  <form id="f" class="stack" autocomplete="off">
+    <div class="card">
+      <h2>Shop details</h2>
+      <div class="form-grid">
+        <div class="field full"><label>Shop name</label><input type="text" name="shopName" maxlength="80" required></div>
+        <div class="field full"><label>Address</label><input type="text" name="shopAddress" maxlength="150"></div>
+        <div class="field"><label>Phone</label><input type="tel" name="shopPhone" maxlength="14"></div>
+        <div class="field"><label>Google Maps link <span class="muted">(optional)</span></label><input type="url" name="shopLocationUrl" placeholder="https://maps.app.goo.gl/…"></div>
+        <div class="field full"><label>Bill footer</label><textarea name="receiptFooter" maxlength="300" placeholder="Thank you! Exchange within 7 days with the bill."></textarea></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>GST (tax)</h2>
+      <p class="muted small" style="margin-top:0">Bills already made keep their type. You can change this any time.</p>
+      <label class="choice"><input type="radio" name="gstRegistered" value="false">
+        <span><b>My shop is not GST-registered</b><br>
+        <span class="muted small">Bills are a <b>Bill of Supply</b>: no GST, no HSN codes, the price is the final price.</span></span></label>
+      <label class="choice"><input type="radio" name="gstRegistered" value="true">
+        <span><b>My shop is GST-registered</b><br>
+        <span class="muted small">Bills are a <b>Tax Invoice</b> with CGST/SGST (5% / 18% clothing slabs), HSN codes and GST reports.</span></span></label>
+      <div class="field" id="gstinBox" style="margin-top:.8rem"><label>GSTIN</label><input type="text" name="shopGstin" maxlength="15" placeholder="08ABCDE1234F1Z5" style="text-transform:uppercase"></div>
+    </div>
+
+    <div class="card">
+      <h2>Shop rules</h2>
+      <div class="form-grid">
+        <div class="field"><label>Staff may give discount up to (%)</label><input type="number" name="staffDiscountLimitPercent" min="0" max="100" step="0.5">
+          <div class="hint">More than this needs the Owner PIN.</div></div>
+        <div class="field"><label>Return / exchange window (days)</label><input type="number" name="returnWindowDays" min="0" max="365">
+          <div class="hint">After this a return needs the Owner PIN.</div></div>
+        <div class="field"><label>Credit note valid for (days)</label><input type="number" name="creditNoteValidityDays" min="1" max="730"></div>
+        <div class="field"><label>Loyalty points per ₹100</label><input type="number" name="pointsPer100" min="0" max="100">
+          <div class="hint">0 switches loyalty points off.</div></div>
+      </div>
+    </div>
+
+    <div id="msg"></div>
+    <div class="row"><button class="primary big" style="min-width:200px">Save settings</button></div>
+  </form>
+</main>
+<script src="js/app.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const f = $('f');
+  requireLogin(['OWNER']).then(async () => {
+    const s = await api('/settings');
+    for (const [k, v] of Object.entries(s)) {
+      if (k === 'gstRegistered') f.querySelector(`[name=gstRegistered][value="${v}"]`).checked = true;
+      else if (f[k]) f[k].value = v ?? '';
+    }
+    const gstBox = () => $('gstinBox').classList.toggle('hidden', f.querySelector('[name=gstRegistered]:checked').value !== 'true');
+    f.querySelectorAll('[name=gstRegistered]').forEach(r => r.onchange = gstBox);
+    gstBox();
+    f.onsubmit = async e => {
+      e.preventDefault();
+      const body = formData(f);
+      body.gstRegistered = body.gstRegistered === 'true';
+      for (const k of ['shopAddress', 'shopPhone', 'shopGstin', 'shopLocationUrl', 'receiptFooter']) if (body[k] == null) body[k] = '';
+      try {
+        await api('/settings', { method: 'PUT', body });
+        $('msg').innerHTML = `<div class="msg ok">Saved. New bills are a <b>${body.gstRegistered ? 'Tax Invoice with GST' : 'Bill of Supply without GST'}</b>.</div>`;
+        toast('Settings saved.', 'ok');
+      } catch (err) { formError(f, $('msg'), err); }
+    };
+  });
+</script>
+</body>
+</html>
