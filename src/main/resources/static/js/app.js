@@ -195,7 +195,7 @@ async function renderShell(me, offline) {
   const shop = offline ? {} : await shopSettings().catch(() => ({}));
   const shopName = shop.shopName || 'My Shop';
   let html = '', pendingGroup = null, current = null;
-  for (const n of NAV) {
+  for (const n of me.mustChangePassword ? [] : NAV) {   // no menu until the temporary password is changed
     if (n.group) { pendingGroup = n.group; continue; }
     if (!n.roles.includes(me.role)) continue;
     if (pendingGroup) { html += `<div class="group">${pendingGroup}</div>`; pendingGroup = null; }

@@ -12,7 +12,9 @@
 <body>
 <main class="stack narrow">
   <div class="page-head"><div><h1>My account</h1><p class="muted" id="who"></p></div></div>
-  <div id="first" class="msg warn hidden"><b>Welcome!</b> You logged in with a temporary password. Please choose your own password to continue.</div>
+  <div id="first" class="msg warn hidden"><b>One step before you start:</b> you logged in with a temporary (demo) password.
+    Choose your own password below. The menu and all screens open as soon as it is saved.
+    <div class="small" style="margin-top:.3rem">Current password = the one you just logged in with (for example <code>Owner@123</code>).</div></div>
 
   <form class="card" id="pwForm" autocomplete="off">
     <h2>Change password</h2>
@@ -40,10 +42,11 @@
 <script src="js/app.js"></script>
 <script>
   const $ = id => document.getElementById(id);
+  if (param('first')) $('first').classList.remove('hidden');   // show at once, before the server answers
   requireLogin().then(me => {
     $('who').textContent = `${me.fullName} · username ${me.username} · ${me.role === 'OWNER' ? 'Owner' : 'Sales staff'}`;
     if (me.mustChangePassword) $('first').classList.remove('hidden');
-    if (me.role === 'OWNER') $('pinForm').classList.remove('hidden');
+    if (me.role === 'OWNER' && !me.mustChangePassword) $('pinForm').classList.remove('hidden');
     $('pwForm').onsubmit = async e => {
       e.preventDefault();
       const f = formData($('pwForm'));
@@ -52,7 +55,10 @@
         await api('/auth/change-password', { method: 'POST', body: { currentPassword: f.currentPassword, newPassword: f.newPassword } });
         $('pwForm').reset();
         $('pwMsg').innerHTML = '<div class="msg ok">Password changed.</div>';
-        if (me.mustChangePassword) setTimeout(() => location.href = homeFor(me), 800);
+        if (me.mustChangePassword) {
+          $('pwMsg').innerHTML = '<div class="msg ok">Password changed. Opening the app…</div>';
+          setTimeout(() => location.href = homeFor(me), 800);
+        }
       } catch (err) { formError($('pwForm'), $('pwMsg'), err); }
     };
     $('pinForm').onsubmit = async e => {
