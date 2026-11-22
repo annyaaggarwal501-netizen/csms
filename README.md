@@ -2,6 +2,29 @@
 
 A complete shop application for **Mansi Collection** (and any other clothing shop), built by Team Vertex. It follows SRS v1.0.1.
 Shop name, address, GST on/off and the shop rules are all set in **Settings**, so another shop can use it without code changes.
+## 🚀 Live App
+
+**Live App:**  
+https://csms-9qy1.onrender.com/login.html?next=pos.html
+
+### 🔐 Live Demo Credentials
+
+- **Username:** `owner`
+- **Password:** `Mansi2026shop`
+
+> These credentials are for accessing the live demo application.
+
+## 🛠️ Run Your Own Version
+
+To create your own version of the application:
+
+1. Clone this repository.
+2. Add your own `.env` file with the required credentials.
+3. Add your **cloud database connection URL**.
+4. Run the application.
+5. After running your own instance, you can change the static/default password to your preferred password.
+
+No code changes are required for the basic shop configuration. The shop details and settings can be customized from the application.
 
 It runs the full demo story from start to finish:
 
