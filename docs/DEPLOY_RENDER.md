@@ -53,7 +53,13 @@ must choose a new password** before it can do anything.
 ## Good to know
 
 - **Free plan sleeps.** If nobody opens the app for 15 minutes, Render puts it to sleep; the next visit takes about a
-  minute to wake up, after that it is fast. Open the link a minute before the shop opens. A paid Render plan never sleeps.
+  minute or more to wake up, after that it is fast. Open the link a minute before the shop opens. A paid Render plan never sleeps.
+  - **Keep it awake for free:** create a free monitor at an uptime service (e.g. UptimeRobot → *New monitor* → HTTP(s) →
+    URL `https://<your-app>.onrender.com/login.html`, interval 10 minutes). The visit every 10 minutes keeps the app awake
+    during the day. One app awake all month fits in Render's free hours; do this for the live app only, not for a staging copy.
+    It only opens the login page, so the database (Neon) can still sleep and nothing is written.
+  - The app warms itself up right after it starts (search, product list, photos), so the first search after waking is
+    fast (measured on a 0.1 CPU container: 13 s before, 0.3 s now).
 - **Updates.** Change the code → commit and push in GitHub Desktop → Render builds and restarts by itself (about 5 minutes).
   New database changes (V9, V10 …) are applied automatically by Flyway at start-up; existing data is kept.
 - **Same database for laptops.** A laptop with the same `.env` still works (`./mvnw spring-boot:run`) and shares the same

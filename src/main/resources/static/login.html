@@ -8,6 +8,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="css/app.css">
+  <script src="js/vt.js"></script>
 </head>
 <body>
 <div class="login-page">
@@ -30,18 +31,22 @@
     </div>
     <div id="err" class="field"></div>
     <button class="primary big" style="width:100%" id="loginBtn">Log in</button>
-    <p class="muted small hidden" id="demo" style="margin-top:1rem;text-align:center">Demo: owner / Owner@123 · staff / Staff@123</p>
+    <p class="muted small hidden" id="demo" style="margin-top:1rem;text-align:center"></p>
   </form>
 </div>
 <script src="js/app.js"></script>
 <script>
   const pw = document.getElementById('password');
+  try { sessionStorage.removeItem('csms:shell'); } catch (e) { /* ignore */ }   // the next login may be someone else
   try { const u = localStorage.getItem('csms:lastUser'); if (u) { document.getElementById('username').value = u; pw.focus(); } } catch (e) { /* ignore */ }
   api('/public/login-info').then(i => {
     document.getElementById('shopName').textContent = i.shopName;
     document.getElementById('mark').textContent = (i.shopName || 'S')[0];
     document.title = 'Log in – ' + i.shopName;
-    document.getElementById('demo').classList.toggle('hidden', !i.demoMode);
+    // Only the demo logins that still work are shown (none once their passwords were changed).
+    const demo = (i.demoLogins || []).map(d => `${esc(d.username)} / ${esc(d.password)}`).join(' · ');
+    document.getElementById('demo').innerHTML = demo ? 'Demo: ' + demo : '';
+    document.getElementById('demo').classList.toggle('hidden', !demo);
   }).catch(() => {});
   document.getElementById('togglePw').onclick = e => {
     pw.type = pw.type === 'password' ? 'text' : 'password';

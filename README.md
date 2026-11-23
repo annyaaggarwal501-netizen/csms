@@ -102,7 +102,8 @@ Flyway rebuilds V1–V5. On Neon, prefer a separate branch for experiments inste
 ### Tests
 ```bash
 ./mvnw test                 # 14 GST unit tests (no database needed); the integration tests are skipped
-./mvnw test -Dit.db=true    # + 19 integration tests on a LOCAL PostgreSQL (db/create_db_user.sql), never on Neon
+./mvnw test -Dit.db=true    # + 34 integration tests on a LOCAL PostgreSQL (db/create_db_user.sql), never on Neon
+cd ui-tests && npm test     # 74 browser checks of the New bill payments (app running locally), see ui-tests/README.md
 scripts/race_test.sh        # app must be running; two counters, one last piece, by real HTTP calls
 ```
 The integration tests use their own database, `clothing_shop_test`, which Flyway wipes and rebuilds on every run. They cover:
@@ -123,6 +124,14 @@ The integration tests use their own database, `clothing_shop_test`, which Flyway
 - adding main categories and sub-categories (duplicates, only two levels)
 - credit limit applied on the bill (staff stopped, Owner PIN approves, part cash allowed)
 - setting a credit limit while registering a new customer (Owner, or staff with the Owner PIN)
+- only cash can be more than the bill (UPI / card / credit / credit note more than the bill are refused)
+
+`EdgeCaseIntegrationTest` (14 tests) covers the boundaries: empty cart, payments 1 paisa short or too high, zero /
+negative amounts and quantities, points, credit without a customer, more pieces than in stock; credit notes (unknown,
+no number, more than the balance, used up, expired, given back by a void); credit exactly at the limit, limit 0,
+already over the limit, Owner PIN formats, void taking credit back; repayments (0, negative, more than due, 3 decimals,
+unknown mode or customer, long note); credit limit values (negative, above 1 crore, staff); mobile numbers
+(+91 / 0 prefix, duplicate, invalid); category names (too short / long, extra spaces).
 
 Every test also checks that the stock history still adds up.
 
@@ -238,6 +247,13 @@ A Postman collection is in `docs/CSMS.postman_collection.json`.
   - Gender comes from the category's parent. Innerwear, blouses, nightwear and infant wear default to non-returnable.
   - `db/sample_import_new_products.csv` is a ready-made demo file: 8 good rows, 3 deliberately bad.
 - **Payments.** Cash (with change), UPI, Card, Credit (needs a customer, see the credit limit below) and Credit note (balance and expiry are checked). Split payments are allowed. A cash row has no reference box; UPI, card, credit and credit note rows do.
+  **Split payment:** a row whose amount you have not typed (grey) fills the rest of the bill by itself, e.g. bill ₹2,625 +
+  UPI ₹1,000 → cash ₹1,625. Once you have typed every amount yourself nothing is changed for you, and the screen says what
+  is left (e.g. bill ₹5,000 with cash, UPI, credit note, credit and card at ₹500 each → "₹2,500 left to collect"). A bill can be saved only when the payments add up to the total
+  and, for the cash part, the **cash received** from the customer is at least that amount (quick buttons: Exact, ₹100 /
+  ₹500 / ₹2,000 rounded up); the change to return is shown. **Only cash can be more than the bill** (the change is given back): a UPI, card, credit or
+  credit note amount that is more than what is left to pay is named in a red error and the bill cannot be saved or printed
+  (the server refuses it too). Only one message is shown at a time: what to fix next.
 - **Stock.** Every change goes through `StockService`, which writes `stock_movement`. Stock cannot go negative (ERR-INV-001). LOW_STOCK and OUT_OF_STOCK alerts are raised without duplicates and close themselves after a stock-in. Stock-in updates the weighted-average cost.
 - **Returns.** Only within 7 days; after that the Owner PIN is needed (WARN-RET-001). Non-returnable items are blocked (ERR-RET-003), and you can't return more than was sold (ERR-RET-001). Returned items go back into stock; a "defective" tick writes them off instead. The credit note is valid for 90 days. Loyalty points are reversed. "Exchange" opens the POS with the credit note already applied as a payment.
 - **Credit (udhaar).** A credit bill adds to the customer's due and writes a SALE row to `customer_credit_txn`; a payment

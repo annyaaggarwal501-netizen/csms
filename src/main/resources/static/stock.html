@@ -5,6 +5,7 @@
   <title>Stock – Shop</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="css/app.css">
+  <script src="js/vt.js"></script>
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#221a1f">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
@@ -66,10 +67,15 @@
       + (s.value_at_cost != null ? k('Stock value', rs0(s.value_at_cost), 'at cost · ' + rs0(s.value_at_price) + ' at price', 'accent') : '');
   }
 
+  let loadSeq = 0;
   async function load() {
     const qs = new URLSearchParams({ filter, q: $('q').value.trim() });
     if ($('cat').value) qs.set('categoryId', $('cat').value);
-    rows = await api('/stock?' + qs);
+    const seq = ++loadSeq;
+    $('count').textContent = 'Searching…';
+    const found = await api('/stock?' + qs);
+    if (seq !== loadSeq) return;                    // a newer search was started meanwhile
+    rows = found;
     const owner = ME.role === 'OWNER';
     $('body').innerHTML = rows.map(v => `<tr class="clickable" data-id="${v.variant_id}">
       <td><span class="with-thumb">${productImg(v.product_id, 'thumb sm')}<span><b>${esc(v.name)}</b><div class="small muted">${esc(v.category)}</div></span></span></td>

@@ -48,7 +48,7 @@ public class ProductController {
      */
     @GetMapping("/products/{id}/image")
     public ResponseEntity<byte[]> image(@PathVariable long id, @RequestParam(required = false) String size,
-                                        WebRequest request) {
+                                        @RequestParam(required = false) String t, WebRequest request) {
         boolean small = "thumb".equals(size);
         ProductImageService.Image img = images.get(id, small)
                 .orElse(new ProductImageService.Image("image/svg+xml", NO_PHOTO, null, true));
@@ -58,7 +58,11 @@ public class ProductController {
         }
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType(img.contentType()))
-                .cacheControl(CacheControl.noCache().cachePrivate())
+                // With ?t=<photo version> the address changes when the photo changes, so the browser may keep it for
+                // good; without it, the browser keeps it 10 minutes (a new photo shows at once where ?t= is used).
+                .cacheControl(t != null && !t.isBlank()
+                        ? CacheControl.maxAge(java.time.Duration.ofDays(365)).cachePrivate().immutable()
+                        : CacheControl.maxAge(java.time.Duration.ofMinutes(10)).cachePrivate())
                 .eTag(etag)
                 .header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
                 .body(img.data());

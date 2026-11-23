@@ -226,9 +226,20 @@ async function requireLogin(allowedRoles) {
 }
 
 async function renderShell(me, offline) {
-  const page = location.pathname.split('/').pop() || 'index.html';
   const shop = offline ? {} : await shopSettings().catch(() => ({}));
   const shopName = shop.shopName || 'My Shop';
+  buildShell(me, shopName);
+  // Remember the menu for this browser tab, so the next page shows it at once (no jump while it loads).
+  try {
+    if (!me.mustChangePassword) sessionStorage.setItem('csms:shell', JSON.stringify({ me, shopName }));
+    else sessionStorage.removeItem('csms:shell');
+  } catch (e) { /* private mode */ }
+  if (shop.shopName) document.title = document.title.replace(/–.*$/, '– ' + shop.shopName);
+}
+
+/** Draws (or redraws) the side menu and the phone top bar. Safe to call twice: it replaces the old one. */
+function buildShell(me, shopName) {
+  const page = location.pathname.split('/').pop() || 'index.html';
   let html = '', pendingGroup = null, current = null;
   for (const n of me.mustChangePassword ? [] : NAV) {   // no menu until the temporary password is changed
     if (n.group) { pendingGroup = n.group; continue; }
@@ -252,17 +263,20 @@ async function renderShell(me, offline) {
   bar.innerHTML = `<button id="navToggle" aria-label="Menu">${icon('menu')}</button><span class="title">${esc(current ? current.label : shopName)}</span>`;
   const back = document.createElement('div');
   back.className = 'shell-back';
-  document.body.prepend(back);
-  document.body.prepend(bar);
-  document.body.prepend(side);
+  const old = { side: document.querySelector('body > .sidebar'), bar: document.querySelector('body > .mobilebar'),
+                back: document.querySelector('body > .shell-back') };
+  const keepScroll = old.side ? old.side.querySelector('nav').scrollTop : 0;
+  if (old.side) { old.side.replaceWith(side); old.bar.replaceWith(bar); old.back.replaceWith(back); }
+  else { document.body.prepend(back); document.body.prepend(bar); document.body.prepend(side); }
+  side.querySelector('nav').scrollTop = keepScroll;
   document.body.classList.add('app');
   bar.querySelector('#navToggle').onclick = () => document.body.classList.toggle('nav-open');
   back.onclick = () => document.body.classList.remove('nav-open');
   side.querySelector('#logoutBtn').onclick = async () => {
+    try { sessionStorage.removeItem('csms:shell'); } catch (e) { /* ignore */ }
     await api('/auth/logout', { method: 'POST' }).catch(() => {});
     location.href = 'login.html';
   };
-  if (shop.shopName) document.title = document.title.replace(/–.*$/, '– ' + shop.shopName);
 }
 
 /** Download rows as a CSV file that opens in Excel (dates and money as plain text). */
@@ -355,3 +369,18 @@ async function shopSettings() {
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 }
+
+// ---------- smooth page changes ----------
+
+// 1) Draw the remembered menu straight away, so the page does not jump when the menu arrives.
+// 2) Let the page content ease in (body.entering, see app.css), only while the page opens.
+(function smoothStart() {
+  const page = location.pathname.split('/').pop() || 'index.html';
+  if (['login.html', 'receipt.html', 'ebill.html', 'index.html'].includes(page)) return;
+  try {
+    const cached = JSON.parse(sessionStorage.getItem('csms:shell') || 'null');
+    if (cached && cached.me) { window.ME = window.ME || cached.me; buildShell(cached.me, cached.shopName || 'My Shop'); }
+  } catch (e) { /* no remembered menu: it is drawn after the login check */ }
+  document.body.classList.add('entering');
+  setTimeout(() => document.body.classList.remove('entering'), 1200);
+})();
