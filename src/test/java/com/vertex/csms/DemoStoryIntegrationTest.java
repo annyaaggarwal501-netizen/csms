@@ -508,6 +508,48 @@ class DemoStoryIntegrationTest {
         assertLedgerConsistent();
     }
 
+    @Test
+    void ownerAddsCategoriesAndSubCategories() throws Exception {
+        MockHttpSession owner = httpLogin("owner", "Owner@123");
+        String main = "Festive " + System.nanoTime() % 100000;
+        String body = mvc.perform(post("/api/v1/categories").session(owner).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"" + main + "\",\"parentId\":null,\"active\":true}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.parent_id").doesNotExist())
+                .andReturn().getResponse().getContentAsString();
+        long mainId = new com.fasterxml.jackson.databind.ObjectMapper().readTree(body).get("category_id").asLong();
+
+        // the bug: every sub-category add failed with a 500 error
+        String sub = mvc.perform(post("/api/v1/categories").session(owner).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Party Wear\",\"parentId\":" + mainId + ",\"active\":true}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.label").value(main + " > Party Wear"))
+                .andReturn().getResponse().getContentAsString();
+        long subId = new com.fasterxml.jackson.databind.ObjectMapper().readTree(sub).get("category_id").asLong();
+        mvc.perform(post("/api/v1/categories").session(owner).contentType(MediaType.APPLICATION_JSON)        // existing main one
+                        .content("{\"name\":\"Kurtis\",\"parentId\":1,\"active\":true}"))
+                .andExpect(status().isConflict());
+
+        mvc.perform(post("/api/v1/categories").session(owner).contentType(MediaType.APPLICATION_JSON)        // duplicate
+                        .content("{\"name\":\"party wear\",\"parentId\":" + mainId + ",\"active\":true}"))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.field").value("name"));
+        mvc.perform(post("/api/v1/categories").session(owner).contentType(MediaType.APPLICATION_JSON)        // 3rd level
+                        .content("{\"name\":\"Too Deep\",\"parentId\":" + subId + ",\"active\":true}"))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.field").value("parentId"));
+        mvc.perform(post("/api/v1/categories").session(owner).contentType(MediaType.APPLICATION_JSON)        // unknown parent
+                        .content("{\"name\":\"Orphan\",\"parentId\":999999,\"active\":true}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/v1/categories/" + mainId)
+                        .session(owner).contentType(MediaType.APPLICATION_JSON)                                 // main with subs
+                        .content("{\"name\":\"" + main + "\",\"parentId\":1,\"active\":true}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/v1/categories/" + subId)
+                        .session(owner).contentType(MediaType.APPLICATION_JSON)                                 // rename: OK
+                        .content("{\"name\":\"Party Wear\",\"parentId\":" + mainId + ",\"active\":false}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.is_active").value(false));
+        mvc.perform(post("/api/v1/categories").session(httpLogin("staff", "Staff@123")).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Staff Try\",\"parentId\":null}"))
+                .andExpect(status().isForbidden());
+    }
+
     private BigDecimal due(long customer) {
         return jdbc.queryForObject("SELECT credit_due FROM customer WHERE customer_id = ?", BigDecimal.class, customer);
     }
