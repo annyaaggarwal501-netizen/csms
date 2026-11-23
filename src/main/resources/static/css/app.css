@@ -238,6 +238,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .totals td { border: 0; padding: .22rem 0; }
 .totals .grand td { font-size: 1.75rem; font-weight: 800; padding-top: .55rem; border-top: 2px solid var(--ink); letter-spacing: -.01em; }
 .pay-row { display: grid; grid-template-columns: 120px 1fr 1fr 34px; gap: .4rem; margin-bottom: .4rem; }
+.pay-row.no-ref { grid-template-columns: 120px 1fr 34px; }
 .shortcuts { font-size: .78rem; color: var(--muted); }
 .shortcuts kbd { background: #efebe8; border: 1px solid #d6d1cd; border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; font-family: inherit; font-size: .74rem; color: var(--ink); }
 .offer-tag { color: var(--ok); font-size: .8rem; }

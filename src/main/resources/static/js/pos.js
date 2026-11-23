@@ -294,13 +294,17 @@ function syncPayments() {
 
 function renderPayments() {
   const box = $('payRows');
-  box.innerHTML = state.payments.map((p, i) => `<div class="pay-row">
+  // Cash needs no reference, so its row has no reference box (the amount box is wider instead).
+  box.innerHTML = state.payments.map((p, i) => `<div class="pay-row ${p.mode === 'CASH' ? 'no-ref' : ''}">
       <select data-mode="${i}">${PAY_MODES.map(([v, t]) => `<option value="${v}" ${p.mode === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
       <input type="number" data-amt="${i}" value="${p.amount}" min="0" step="1">
-      <input type="text" data-ref="${i}" value="${esc(p.reference)}" placeholder="${refHint(p.mode)}">
+      ${p.mode === 'CASH' ? '' : `<input type="text" data-ref="${i}" value="${esc(p.reference)}" placeholder="${refHint(p.mode)}">`}
       <button class="icon-btn" data-rm="${i}" ${state.payments.length === 1 ? 'disabled' : ''} title="Remove">×</button></div>`).join('');
   box.querySelectorAll('[data-mode]').forEach(s => s.onchange = () => {
-    state.payments[+s.dataset.mode].mode = s.value; renderPayments();
+    const pay = state.payments[+s.dataset.mode];
+    pay.mode = s.value;
+    if (pay.mode === 'CASH') pay.reference = '';
+    renderPayments();
   });
   box.querySelectorAll('[data-amt]').forEach(s => s.oninput = () => {
     state.autoPay = false; state.payments[+s.dataset.amt].amount = s.value; renderChange(); updateComplete();
