@@ -11,6 +11,7 @@ const state = {
   customer: null,      // {id, name, mobile, waOptIn, loyaltyPoints, ...}
   payments: [{ mode: 'CASH', amount: 0, reference: '' }],
   autoPay: true,       // keep the single payment row equal to the total until the user edits it
+  balanceIdx: -1,      // with a split payment, this row (never typed in) automatically takes the rest of the bill
   ownerPin: null,      // remembered for this bill after the Owner approves
   creditNote: null,    // {cnNo, balance} when coming from an exchange
 };
@@ -24,18 +25,22 @@ requireLogin().then(init);
 async function init() {
   window.GST_REGISTERED = (await shopSettings()).gstRegistered;
   $('scan').addEventListener('keydown', onScanKey);
-  $('scan').addEventListener('input', debounce(onScanInput, 200));
+  $('scan').addEventListener('input', debounce(onScanInput, 150));
   $('clearCart').onclick = clearCart;
   $('custFindBtn').onclick = findCustomer;
   $('custMobile').addEventListener('keydown', e => { if (e.key === 'Enter') findCustomer(); });
   $('addPay').onclick = () => {
+    // Split payment: add a second way to pay. The first row then takes whatever is left of the bill.
+    const used = new Set(state.payments.map(p => p.mode));
+    const mode = ['UPI', 'CASH', 'CARD', 'CREDIT'].find(m => !used.has(m)) || 'UPI';
     state.autoPay = false;
-    const paid = state.payments.reduce((s, p) => s + Number(p.amount || 0), 0);
-    const left = Math.max(0, grand() - paid);
-    state.payments.push({ mode: 'UPI', amount: left, reference: '' });
+    state.payments.push({ mode, amount: 0, reference: '' });
+    balancePayments();
     renderPayments();
+    const inputs = document.querySelectorAll('[data-amt]');
+    inputs[inputs.length - 1].select();
   };
-  $('cashGiven').addEventListener('input', renderChange);
+  $('cashGiven').addEventListener('input', () => { renderChange(); updateComplete(); });
   $('completeBtn').onclick = complete;
   $('holdBtn').onclick = holdBill;
   $('heldBtn').onclick = showHeld;
@@ -67,7 +72,8 @@ function saveDraft() {
 
 async function restoreDraft() {
   const d = store.get('posDraft');
-  if (!d || !Array.isArray(d.cart) || !d.cart.length || Date.now() - d.at > 24 * 3600e3) { store.del('posDraft'); return; }
+  const sane = d && Array.isArray(d.cart) && d.cart.length && d.cart.every(l => Number.isInteger(l.quantity) && l.quantity >= 1 && l.quantity <= 999);
+  if (!sane || Date.now() - d.at > 24 * 3600e3) { store.del('posDraft'); return; }   // old or broken: start clean
   state.cart = d.cart;
   state.payments = d.payments && d.payments.length ? d.payments : state.payments;
   state.autoPay = d.autoPay !== false;
@@ -126,15 +132,32 @@ async function onScanKey(e) {
   if (searchResults.length === 1) addVariant(searchResults[0]);
 }
 
+// Search: shows "Searching…" at once, keeps the answers of the last minute (typing back is instant) and ignores
+// an answer that arrives after a newer search was started (fast typing on a slow connection).
+const searchCache = new Map();
+let searchSeq = 0;
 async function onScanInput() {
+  // (stock shown in results can be up to a minute old; the bill itself always checks stock on the server)
   const q = $('scan').value.trim();
   $('scanMsg').innerHTML = '';
   if (q.length < 2 || /^\d+$/.test(q)) { hideResults(); return; }
+  const key = q.toLowerCase();
+  const hit = searchCache.get(key);
+  if (hit && Date.now() - hit.at < 60000) { showResults(hit.rows); return; }
+  const seq = ++searchSeq;
+  $('results').innerHTML = '<div class="muted">Searching…</div>';
+  $('results').classList.remove('hidden');
   try {
-    searchResults = await api('/variants/search?q=' + encodeURIComponent(q));
-    selIndex = searchResults.length ? 0 : -1;
-    drawResults();
-  } catch (err) { $('scanMsg').innerHTML = errorHtml(err); }
+    const rows = await api('/variants/search?q=' + encodeURIComponent(q));
+    searchCache.set(key, { at: Date.now(), rows });
+    if (searchCache.size > 100) searchCache.delete(searchCache.keys().next().value);
+    if (seq === searchSeq && $('scan').value.trim().toLowerCase() === key) showResults(rows);
+  } catch (err) { if (seq === searchSeq) { hideResults(); $('scanMsg').innerHTML = errorHtml(err); } }
+}
+function showResults(rows) {
+  searchResults = rows;
+  selIndex = rows.length ? 0 : -1;
+  drawResults();
 }
 
 function drawResults() {
@@ -215,12 +238,14 @@ async function clearCart() {
 }
 
 function resetSale() {
+  searchCache.clear();                       // stock changed with the last bill: search fresh
   state.saved = false;
   store.del('posDraft');
   state.cart = [];
   state.quote = null;
   state.payments = [{ mode: 'CASH', amount: 0, reference: '' }];
   state.autoPay = true;
+  state.balanceIdx = -1;
   state.ownerPin = null;
   state.creditNote = null;
   setCustomer(null);
@@ -275,7 +300,7 @@ function render() {
   document.querySelectorAll('.gst-col').forEach(e => e.classList.toggle('hidden', !gst));
   $('tGrand').textContent = rs0(q ? q.grandTotal : 0);
 
-  if (state.autoPay) syncPayments();
+  if (state.autoPay) syncPayments(); else balancePayments();
   renderPayments();
 }
 
@@ -292,12 +317,27 @@ function syncPayments() {
   }
 }
 
+/**
+ * Split payment: the first row whose amount was NOT typed by hand (grey) gets "total minus the other rows", so a
+ * normal split (e.g. cash + UPI 1,000) adds up by itself. Once every amount has been typed by hand, nothing is
+ * changed automatically and the screen says what is left to collect (or how much too much was entered).
+ */
+function balancePayments() {
+  state.balanceIdx = state.payments.length < 2 || state.creditNote ? -1 : state.payments.findIndex(p => !p.typed);
+  const i = state.balanceIdx;
+  if (i < 0) return;                       // every amount was typed by hand: nothing is changed, the screen shows what is left
+  const others = state.payments.reduce((s, p, j) => j === i ? s : s + Math.max(0, Number(p.amount || 0)), 0);
+  state.payments[i].amount = Math.max(0, Math.round((grand() - others) * 100) / 100);
+}
+
 function renderPayments() {
   const box = $('payRows');
   // Cash needs no reference, so its row has no reference box (the amount box is wider instead).
+  const split = state.payments.length > 1 && !state.creditNote;
   box.innerHTML = state.payments.map((p, i) => `<div class="pay-row ${p.mode === 'CASH' ? 'no-ref' : ''}">
       <select data-mode="${i}">${PAY_MODES.map(([v, t]) => `<option value="${v}" ${p.mode === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
-      <input type="number" data-amt="${i}" value="${p.amount}" min="0" step="1">
+      <input type="number" data-amt="${i}" value="${p.amount}" min="0" step="1"
+        ${split && i === state.balanceIdx ? 'class="auto" title="Fills the rest of the bill by itself (until you type in it)"' : ''}>
       ${p.mode === 'CASH' ? '' : `<input type="text" data-ref="${i}" value="${esc(p.reference)}" placeholder="${refHint(p.mode)}">`}
       <button class="icon-btn" data-rm="${i}" ${state.payments.length === 1 ? 'disabled' : ''} title="Remove">×</button></div>`).join('');
   box.querySelectorAll('[data-mode]').forEach(s => s.onchange = () => {
@@ -307,42 +347,118 @@ function renderPayments() {
     renderPayments();
   });
   box.querySelectorAll('[data-amt]').forEach(s => s.oninput = () => {
-    state.autoPay = false; state.payments[+s.dataset.amt].amount = s.value; renderChange(); updateComplete();
+    const i = +s.dataset.amt;
+    state.autoPay = false;
+    state.payments[i].amount = s.value;
+    state.payments[i].typed = true;             // typed by hand: never changed automatically
+    state.lastTyped = i;
+    if (state.payments.length > 1) {
+      balancePayments();
+      box.querySelectorAll('[data-amt]').forEach((x, j) => {
+        x.classList.toggle('auto', j === state.balanceIdx);
+        if (j === state.balanceIdx) x.value = state.payments[j].amount;
+      });
+      const note = box.querySelector('.split-note');
+      if (note) note.textContent = splitNote();
+    }
+    renderChange(); updateComplete();
   });
-  box.querySelectorAll('[data-ref]').forEach(s => s.oninput = () => { state.payments[+s.dataset.ref].reference = s.value; });
+  box.querySelectorAll('[data-ref]').forEach(s => s.oninput = () => { state.payments[+s.dataset.ref].reference = s.value; updateComplete(); });
   box.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => {
     state.payments.splice(+b.dataset.rm, 1);
-    if (state.payments.length === 1) state.autoPay = true;
+    if (state.payments.length === 1) { state.autoPay = true; state.payments[0].typed = false; syncPayments(); } else balancePayments();
     render();
   });
+  if (split) box.insertAdjacentHTML('beforeend', `<div class="small muted split-note" style="margin:-.1rem 0 .4rem">${splitNote()}</div>`);
   $('cashBox').classList.toggle('hidden', !state.payments.some(p => p.mode === 'CASH'));
   renderChange();
   updateComplete();
+}
+
+function splitNote() {
+  const i = state.balanceIdx;
+  if (i < 0) return 'You typed every amount: they must add up to the bill.';
+  const name = (PAY_MODES.find(m => m[0] === state.payments[i].mode) || ['', 'This'])[1];
+  return `The ${name} amount (grey) fills the rest of the bill by itself, until you type in it.`;
 }
 
 function refHint(mode) {
   return { UPI: 'UPI ref (optional)', CARD: 'Last 4 digits', CREDIT_NOTE: 'CN-2627-00001', CREDIT: 'Note', CASH: '' }[mode] || '';
 }
 
+/** Cash part of the bill (sum of the Cash payment rows). */
+function cashDue() {
+  return state.payments.filter(p => p.mode === 'CASH').reduce((s, p) => s + Number(p.amount || 0), 0);
+}
+
 function renderChange() {
-  const cash = state.payments.filter(p => p.mode === 'CASH').reduce((s, p) => s + Number(p.amount || 0), 0);
-  const given = Number($('cashGiven').value || 0);
-  $('change').textContent = given > 0 ? rs0(Math.max(0, given - cash)) : '₹0';
-  $('change').style.color = given > 0 && given < cash ? 'var(--err)' : '';
+  const cash = cashDue();
+  const raw = $('cashGiven').value.trim();
+  const given = Number(raw || 0);
+  const short = raw !== '' && given < cash;
+  const paid = state.payments.reduce((s, p) => s + Number(p.amount || 0), 0);
+  const mismatch = state.quote && Math.abs(grand() - paid) > 0.001;   // fix the amounts first
+  $('change').textContent = mismatch ? '—' : short ? 'Short ' + rs0(cash - given) : rs0(Math.max(0, given - cash));
+  $('change').style.color = short ? 'var(--err)' : '';
+  $('cashGiven').classList.toggle('invalid', short && !mismatch);
+  // One-tap amounts: exact, then the usual notes above the cash amount.
+  const quick = cash > 0 ? [cash, ...[100, 500, 2000].map(n => Math.ceil(cash / n) * n)] : [];
+  $('cashQuick').innerHTML = [...new Set(quick)].filter(v => v >= cash).slice(0, 4)
+    .map((v, i) => `<button type="button" class="small" data-cash="${v}">${i === 0 ? 'Exact ' : ''}${rs0(v)}</button>`).join('');
+  $('cashQuick').querySelectorAll('[data-cash]').forEach(btn => btn.onclick = () => {
+    $('cashGiven').value = btn.dataset.cash; renderChange(); updateComplete();
+  });
 }
 
 function updateComplete() {
   const paid = state.payments.reduce((s, p) => s + Number(p.amount || 0), 0);
-  const ok = state.quote && state.quote.lines.length && state.quote.lines.every(l => l.enoughStock);
-  $('completeBtn').disabled = !ok;
+  const itemsOk = state.quote && state.quote.lines.length && state.quote.lines.every(l => l.enoughStock);
   const diff = Math.round((grand() - paid) * 100) / 100;
+  const cash = cashDue();
+  const givenRaw = $('cashGiven').value.trim();
+  const cashShort = cash > 0 && (givenRaw === '' || Number(givenRaw) < cash);
+  // A bill can be saved only when the payments match the total and all the cash has been received.
   const c = creditCheck();
-  $('payMsg').innerHTML = (state.quote && diff !== 0
-    ? `<div class="msg warn">${diff > 0 ? 'Still to collect: ' + rs(diff) : 'Payments are ' + rs(-diff) + ' more than the total'}</div>` : '')
-    + (c.amount > 0 && !state.customer ? '<div class="msg warn" style="margin-top:.4rem"><b>Warning:</b> Choose the customer first – credit (udhaar) needs a customer.</div>' : '')
-    + (c.amount > 0 && state.customer && !c.over ? `<div class="msg info" style="margin-top:.4rem">Credit available for ${esc(state.customer.name)}: <b>${rs0(c.available)}</b> (limit ${rs0(c.limit)}, already due ${rs0(c.due)}).</div>` : '')
-    + (c.over ? `<div class="msg err" style="margin-top:.4rem"><b>Over the credit limit by ${rs0(c.amount - c.available)}.</b> ${esc(state.customer.name)} can take only ${rs0(c.available)} more on credit (limit ${rs0(c.limit)}, already due ${rs0(c.due)}). ${ME.role === 'OWNER' ? 'As the Owner you can still save it.' : 'Take the rest in cash/UPI, or the Owner approves with the PIN.'}</div>` : '');
+  const overNonCash = nonCashOver();
+  const label = mode => (PAY_MODES.find(x => x[0] === mode) || ['', mode])[1];
+  const negative = state.payments.find(p => Number(p.amount || 0) < 0);
+  const cnNoNumber = state.payments.find(p => p.mode === 'CREDIT_NOTE' && Number(p.amount || 0) > 0 && !String(p.reference || '').trim());
+  $('completeBtn').disabled = !itemsOk || diff !== 0 || cashShort || !!overNonCash || !!negative || !!cnNoNumber
+    || (c.amount > 0 && !state.customer);
+  $('cashGiven').classList.toggle('need', !!(itemsOk && diff === 0 && cash > 0 && givenRaw === ''));
+  // Only the most important message is shown, so it is always clear what to do next.
+  const box = (cls, html) => `<div class="msg ${cls}">${html}</div>`;
+  let m = '';
+  if (!state.quote || !state.quote.lines.length) m = '';
+  else if (negative) m = box('err', `<b>${label(negative.mode)} amount cannot be less than 0.</b> Remove the minus sign.`);
+  else if (c.amount > 0 && !state.customer) m = box('err', '<b>Choose the customer first.</b> Credit (udhaar) needs a customer: type their mobile above.');
+  else if (diff > 0) m = box('err', `<b>${rs0(diff)} left to collect.</b> The payments add up to ${rs0(paid)}, but the bill is ${rs0(grand())}. ${state.payments.length > 1 ? 'Raise one of the amounts.' : 'Raise the amount, or use “+ Split payment”.'}`);
+  else if (overNonCash) m = box('err', `<b>${overNonCash.label} ${rs0(overNonCash.amount)} is more than what is left to pay (${rs0(overNonCash.left)}).</b> Only cash can be more than the bill – the change is given back. Lower the ${overNonCash.label} amount to ${rs0(overNonCash.left)}.`);
+  else if (diff < 0) m = box('err', `<b>Cash amount is ${rs0(-diff)} more than the bill.</b> Enter only the cash part of the bill (${rs0(cash + diff)}) as the cash amount; if the customer gave more, type it in “Cash received” – the change is shown there.`);
+  else if (c.over) m = box('err', `<b>Over the credit limit by ${rs0(c.amount - c.available)}.</b> ${esc(state.customer.name)} can take only ${rs0(c.available)} more on credit (limit ${rs0(c.limit)}, already due ${rs0(c.due)}). ${ME.role === 'OWNER' ? 'As the Owner you can still save it.' : 'Take the rest in cash/UPI, or the Owner approves with the PIN.'}`);
+  else if (cnNoNumber) m = box('err', '<b>Type the credit note number</b> (printed on the credit note, e.g. CN-2627-00001) next to the credit note amount.');
+  else if (cashShort && givenRaw === '') m = '';          // the Cash received box is highlighted instead
+  else if (cashShort) m = box('err', `<b>Cash received is ${rs0(cash - Number(givenRaw))} less</b> than the cash part (${rs0(cash)}). Collect the rest, or pay part by UPI with “+ Split payment”.`);
+  else if (c.amount > 0) m = box('info', `Credit available for ${esc(state.customer.name)}: <b>${rs0(c.available)}</b> (limit ${rs0(c.limit)}, already due ${rs0(c.due)}).`);
+  $('payMsg').innerHTML = m;
   saveDraft();
+}
+
+/**
+ * When the payments are more than the bill, says which payment is too much. Only cash may be more than the bill
+ * (the change is given back, via "Cash received"), so a UPI / card / credit / credit note amount that is more than
+ * what was left after the other payments is the mistake: the last such amount typed is named, with what was left.
+ */
+function nonCashOver() {
+  const total = grand();
+  const paid = state.payments.reduce((s, p) => s + Number(p.amount || 0), 0);
+  if (paid <= total + 0.001) return null;
+  const nonCash = state.payments.map((p, i) => ({ p, i })).filter(x => x.p.mode !== 'CASH' && Number(x.p.amount || 0) > 0);
+  if (!nonCash.length) return null;                           // only cash rows: handled by the cash message
+  const pick = nonCash.find(x => x.i === state.lastTyped) || nonCash[nonCash.length - 1];
+  const amount = Number(pick.p.amount || 0);
+  return { label: (PAY_MODES.find(m => m[0] === pick.p.mode) || ['', pick.p.mode])[1], amount,
+           left: Math.max(0, total - (paid - amount)) };
 }
 
 /** Credit (udhaar) on this bill compared with the customer's credit limit. */
@@ -437,6 +553,7 @@ function showRegister(mobile) {
 // ---------- complete sale ----------
 
 async function complete() {
+  if ($('completeBtn').disabled) return;
   const q = state.quote;
   if (!q || !q.lines.length) return;
   if (q.needsOwnerPin && ME.role !== 'OWNER' && !state.ownerPin) {

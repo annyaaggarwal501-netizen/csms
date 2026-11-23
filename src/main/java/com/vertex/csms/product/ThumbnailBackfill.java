@@ -18,9 +18,11 @@ public class ThumbnailBackfill implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(ThumbnailBackfill.class);
     private final JdbcTemplate jdbc;
+    private final ProductImageService images;
 
-    public ThumbnailBackfill(JdbcTemplate jdbc) {
+    public ThumbnailBackfill(JdbcTemplate jdbc, ProductImageService images) {
         this.jdbc = jdbc;
+        this.images = images;
     }
 
     @Override
@@ -37,6 +39,7 @@ public class ThumbnailBackfill implements ApplicationRunner {
                 made++;
             }
         }
+        if (made > 0) images.forgetAll();
         if (made > 0) log.info("Made small copies (thumbnails) for {} product photos.", made);
     }
 }

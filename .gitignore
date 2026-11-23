@@ -11,3 +11,6 @@ preview/
 
 # Old prototype screenshots (kept locally only)
 docs/screenshots_old_prototype/
+
+# Browser tests
+ui-tests/node_modules/

@@ -77,7 +77,8 @@ public class BillingService {
     // ---------- request / response shapes ----------
 
     public record CartLine(@NotNull Long variantId,
-                           @NotNull @Min(value = 1, message = "Quantity must be at least 1") @Max(999) Integer quantity,
+                           @NotNull @Min(value = 1, message = "Quantity must be at least 1")
+                           @Max(value = 999, message = "At most 999 pieces of one item on a bill.") Integer quantity,
                            @DecimalMin(value = "0.00", message = "Discount cannot be negative") BigDecimal manualDiscount) {}
 
     public record CartRequest(Long customerId, @NotNull List<@Valid CartLine> lines, String ownerPin) {}
@@ -163,6 +164,13 @@ public class BillingService {
         // 3. Payments must add up to the rounded grand total (REQ-BIL-6).
         BigDecimal paid = req.payments().stream().map(PaymentRequest::amount).map(Money::round)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal nonCash = req.payments().stream().filter(p -> p.mode() != PaymentMode.CASH)
+                .map(PaymentRequest::amount).map(Money::round).reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (nonCash.compareTo(q.grandTotal()) > 0) {
+            throw ApiException.badRequest("ERR-BIL-003", "UPI, card, credit and credit note together (Rs " + nonCash
+                    + ") cannot be more than the bill (Rs " + q.grandTotal() + "). Only cash can be more: the change is given back.",
+                    "payments");
+        }
         if (paid.compareTo(q.grandTotal()) != 0) {
             throw ApiException.badRequest("ERR-BIL-003", "Payments add up to Rs " + paid + " but the bill total is Rs "
                     + q.grandTotal() + ".", "payments");

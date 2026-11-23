@@ -30,13 +30,15 @@ public class AuthController {
     private final AppUserRepository users;
     private final PasswordEncoder encoder;
     private final SecurityContextRepository contextRepository;
+    private final DemoLogins demoLogins;
     private final AuditService audit;
 
     public AuthController(AppUserRepository users, PasswordEncoder encoder, SecurityContextRepository contextRepository,
-                          AuditService audit) {
+                          AuditService audit, DemoLogins demoLogins) {
         this.users = users;
         this.encoder = encoder;
         this.contextRepository = contextRepository;
+        this.demoLogins = demoLogins;
         this.audit = audit;
     }
 
@@ -113,6 +115,7 @@ public class AuthController {
         UserPrincipal principal = principalOf(user);
         startSession(principal, request, response);
         audit.log("PASSWORD_CHANGED", "user", user.getId(), null);
+        demoLogins.refreshLater();
         return principal;
     }
 

@@ -36,8 +36,35 @@ public class ProductImageService {
 
     public static final int THUMB_PX = 320;
 
+    /**
+     * Photos kept in memory after the first read, so showing a list of products does not read every photo from the
+     * database again (each photo is small: thumbnails ~20 KB, full photos up to 2 MB). Cleared for a product when its
+     * photo is uploaded or removed; at most ~400 entries.
+     */
+    private final java.util.Map<String, Optional<Image>> cache = new java.util.concurrent.ConcurrentHashMap<>();
+
     /** The full photo, or with small = true the ~320 px thumbnail (falls back to the full photo if there is none). */
     public Optional<Image> get(long productId, boolean small) {
+        String key = productId + (small ? ":t" : ":f");
+        Optional<Image> hit = cache.get(key);
+        if (hit != null) return hit;
+        Optional<Image> img = load(productId, small);
+        if (cache.size() > 400) cache.clear();
+        cache.put(key, img);
+        return img;
+    }
+
+    private void forget(long productId) {
+        cache.remove(productId + ":t");
+        cache.remove(productId + ":f");
+    }
+
+    /** Called after photos were changed directly in the database (e.g. thumbnails made at start-up). */
+    public void forgetAll() {
+        cache.clear();
+    }
+
+    private Optional<Image> load(long productId, boolean small) {
         String column = small ? "COALESCE(thumb, data)" : "data";
         String type = small ? "CASE WHEN thumb IS NULL THEN content_type ELSE 'image/jpeg' END" : "content_type";
         List<Image> found = jdbc.query(
@@ -89,12 +116,14 @@ public class ProductImageService {
                     thumb = EXCLUDED.thumb, is_placeholder = FALSE, updated_by = EXCLUDED.updated_by,
                     updated_at = EXCLUDED.updated_at""",
                 productId, type, data, thumb, CurrentUser.id(), now);
+        forget(productId);
         return new ImageInfo(now, false);
     }
 
     @Transactional
     public void delete(long productId) {
         jdbc.update("DELETE FROM product_image WHERE product_id = ?", productId);
+        forget(productId);
     }
 
     /**

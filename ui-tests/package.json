@@ -1,0 +1,11 @@
+{
+  "name": "csms-ui-tests",
+  "private": true,
+  "description": "Browser tests for the New bill (POS) payments. Run only against the local app.",
+  "scripts": {
+    "test": "node payments-basic.test.js && node payments-split-credit.test.js && node payments-edge.test.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.50.0"
+  }
+}

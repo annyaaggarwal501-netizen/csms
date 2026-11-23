@@ -18,9 +18,11 @@ public class UserController {
     private final AppUserRepository users;
     private final PasswordEncoder encoder;
     private final AuditService audit;
+    private final DemoLogins demoLogins;
 
-    public UserController(AppUserRepository users, PasswordEncoder encoder, AuditService audit) {
+    public UserController(AppUserRepository users, PasswordEncoder encoder, AuditService audit, DemoLogins demoLogins) {
         this.users = users;
+        this.demoLogins = demoLogins;
         this.encoder = encoder;
         this.audit = audit;
     }
@@ -60,6 +62,7 @@ public class UserController {
         u.setMustChangePassword(true);
         users.save(u);
         audit.log("USER_CREATED", "user", u.getId(), username + " (" + u.getRole() + ")");
+        demoLogins.refreshLater();
         return UserRow.of(u);
     }
 
@@ -88,6 +91,7 @@ public class UserController {
             changes.append(req.active() ? "activated; " : "deactivated; ");
         }
         audit.log("USER_UPDATED", "user", u.getId(), u.getUsername() + ": " + changes);
+        demoLogins.refreshLater();
         return UserRow.of(u);
     }
 
@@ -104,6 +108,7 @@ public class UserController {
         u.setLocked(false);
         u.setFailedAttempts(0);
         audit.log("PASSWORD_RESET", "user", u.getId(), u.getUsername());
+        demoLogins.refreshLater();
         return UserRow.of(u);
     }
 

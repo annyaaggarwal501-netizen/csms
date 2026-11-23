@@ -53,61 +53,9 @@ import com.vertex.csms.security.UserPrincipal;
  *
  * Needs PostgreSQL running with the clothing_shop_test database (db/create_db_user.sql). Run with:
  *     ./mvnw test -Dit.db=true
- * The test database is wiped and rebuilt from V1..V5 every run, so it never touches clothing_shop or Neon.
+ * The test database is wiped and rebuilt from all migrations every run, so it never touches clothing_shop or Neon.
  */
-@EnabledIfSystemProperty(named = "it.db", matches = "true")
-@SpringBootTest(properties = {
-        "spring.datasource.url=jdbc:postgresql://localhost:5432/clothing_shop_test",
-        "spring.datasource.username=csms",
-        "spring.datasource.password=csms_dev_pw",
-        "spring.flyway.clean-disabled=false"})
-@AutoConfigureMockMvc
-class DemoStoryIntegrationTest {
-
-    @TestConfiguration
-    static class CleanDatabase {
-        @Bean
-        FlywayMigrationStrategy cleanThenMigrate() {
-            return flyway -> { flyway.clean(); flyway.migrate(); };
-        }
-    }
-
-    static {
-        // Same as CsmsApplication.main(): the shop works in India time.
-        java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("Asia/Kolkata"));
-    }
-
-    static final UserPrincipal OWNER = new UserPrincipal(1L, "owner", "Renu Yadav", Role.OWNER, false);
-    static final UserPrincipal STAFF = new UserPrincipal(2L, "staff", "Counter Staff", Role.SALES_STAFF, false);
-
-    @Autowired BillingService billing;
-    @Autowired HeldBillService held;
-    @Autowired VoidService voids;
-    @Autowired ReturnService returns;
-    @Autowired ReceiptService receipts;
-    @Autowired ProductImportService importer;
-    @Autowired JdbcTemplate jdbc;
-    @Autowired MockMvc mvc;
-    @Autowired com.vertex.csms.common.SettingsService settings;
-    @Autowired com.vertex.csms.customer.CreditService credit;
-    @Autowired com.vertex.csms.report.ReportService reports;
-
-    @BeforeEach
-    void setUp() {
-        // Keep the festive saree offer running whatever day the tests run.
-        jdbc.update("UPDATE offer SET valid_from = NOW() - INTERVAL '1 day', valid_to = NOW() + INTERVAL '30 days'");
-        jdbc.update("INSERT INTO customer (name, mobile, area, wa_opt_in, consent_at, consent_method, consent_by, credit_limit) "
-                + "VALUES ('Team Tester (TEST)', '9000000001', 'Team Vertex', TRUE, NOW(), 'SIGNED_FORM', 1, 5000) "
-                + "ON CONFLICT (mobile) DO NOTHING");
-        login(STAFF);
-        // Most tests check the GST rules, so the shop is GST-registered unless a test says otherwise.
-        settings.setGstRegistered(true);
-    }
-
-    @AfterEach
-    void tearDown() {
-        SecurityContextHolder.clearContext();
-    }
+class DemoStoryIntegrationTest extends IntegrationTestBase {
 
     // ---------- the demo bill ----------
 
@@ -395,14 +343,6 @@ class DemoStoryIntegrationTest {
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("ERR-PRD-006"));
     }
 
-    // ---------- helpers ----------
-
-    private MockHttpSession httpLogin(String user, String password) throws Exception {
-        return (MockHttpSession) mvc.perform(post("/api/v1/auth/login").contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"username\":\"" + user + "\",\"password\":\"" + password + "\"}"))
-                .andExpect(status().isOk()).andReturn().getRequest().getSession(false);
-    }
-
     // ---------- full application features ----------
 
     @Test
@@ -606,44 +546,17 @@ class DemoStoryIntegrationTest {
         assertThat(count("audit_log WHERE action = 'CREDIT_LIMIT_CHANGED' AND details LIKE 'New customer Kiran Devi%'")).isEqualTo(2);
     }
 
-    private BigDecimal due(long customer) {
-        return jdbc.queryForObject("SELECT credit_due FROM customer WHERE customer_id = ?", BigDecimal.class, customer);
+    @Test
+    void onlyCashCanBeMoreThanTheBill() {
+        int before = count("sale");
+        assertCode(() -> billing.complete(new CompleteRequest(null, List.of(line(1, 1)),          // UPI 1,100 on a 1,050 bill
+                List.of(pay(PaymentMode.UPI, "1100")), null)), "ERR-BIL-003");
+        assertCode(() -> billing.complete(new CompleteRequest(null, List.of(line(1, 1)),
+                List.of(pay(PaymentMode.UPI, "1000"), pay(PaymentMode.CARD, "100")), null)), "ERR-BIL-003");
+        assertThat(count("sale")).isEqualTo(before);                                           // nothing saved, nothing to print
+        billing.complete(new CompleteRequest(null, List.of(line(1, 1)),
+                List.of(pay(PaymentMode.UPI, "1000"), pay(PaymentMode.CASH, "50")), null));
+        assertThat(count("sale")).isEqualTo(before + 1);
     }
 
-    private static void login(UserPrincipal p) {
-        SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(p, null,
-                List.of(new SimpleGrantedAuthority("ROLE_" + p.role().name()))));
-    }
-
-    private static CartLine line(long variantId, int qty) {
-        return new CartLine(variantId, qty, null);
-    }
-
-    private static PaymentRequest pay(PaymentMode mode, String amount) {
-        return new PaymentRequest(mode, new BigDecimal(amount), null);
-    }
-
-    private long customerId() {
-        return jdbc.queryForObject("SELECT customer_id FROM customer WHERE mobile = '9000000001'", Long.class);
-    }
-
-    private int stock(long variantId) {
-        return jdbc.queryForObject("SELECT stock_qty FROM variant WHERE variant_id = ?", Integer.class, variantId);
-    }
-
-    private int count(String fromWhere) {
-        return jdbc.queryForObject("SELECT COUNT(*) FROM " + fromWhere, Integer.class);
-    }
-
-    private void assertLedgerConsistent() {
-        assertThat(jdbc.queryForObject("""
-                SELECT COUNT(*) FROM variant v
-                LEFT JOIN (SELECT variant_id, SUM(qty_change) AS total FROM stock_movement GROUP BY variant_id) m USING (variant_id)
-                WHERE v.stock_qty <> COALESCE(m.total, 0)""", Integer.class)).as("stock ledger mismatches").isZero();
-    }
-
-    private static void assertCode(Runnable call, String code) {
-        assertThatThrownBy(call::run).isInstanceOf(ApiException.class)
-                .satisfies(e -> assertThat(((ApiException) e).getCode()).isEqualTo(code));
-    }
 }
