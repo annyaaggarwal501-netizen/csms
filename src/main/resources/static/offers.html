@@ -36,8 +36,10 @@
     if (me.role === 'OWNER') { $('addBtn').classList.remove('hidden'); $('addBtn').onclick = () => edit(null); }
     $('tabs').querySelectorAll('button').forEach(b => b.onclick = () => {
       $('tabs').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
-      filter = b.dataset.s; draw();
+      filter = b.dataset.s; store.set('offers.tab', filter); draw();
     });
+    filter = store.get('offers.tab', '');
+    $('tabs').querySelectorAll('button').forEach(x => x.classList.toggle('on', x.dataset.s === filter));
     load();
   });
 

@@ -12,15 +12,16 @@
 <body>
 <main class="stack">
   <div class="page-head">
-    <div><h1>Credit (udhaar)</h1><p class="muted small">Customers who bought on credit. When they pay, click <b>Receive payment</b>.</p></div>
-    <button id="csv">Excel (CSV)</button>
+    <div><h1>Credit (udhaar)</h1><p class="muted small">Each customer can buy on credit up to their limit. When they pay, click <b>Receive payment</b>.</p></div>
+    <div class="row tight"><button id="csv">Excel (CSV)</button><button class="primary hidden" id="limitBtn">+ Set credit limit</button></div>
   </div>
   <div class="grid kpis" id="kpis"></div>
+  <div class="tabs" id="tabs"><button data-t="due" class="on">Owes money</button><button data-t="all">All with a credit limit</button></div>
   <div class="grid side">
     <div class="card flush table-wrap">
       <table>
-        <thead><tr><th>Customer</th><th>Mobile</th><th class="num">Due</th><th class="num">Limit</th><th>Last credit</th><th>Last payment</th></tr></thead>
-        <tbody id="body"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+        <thead><tr><th>Customer</th><th>Mobile</th><th class="num">Due</th><th class="num">Limit</th><th class="num">Available</th><th>Last credit</th><th>Last payment</th></tr></thead>
+        <tbody id="body"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
       </table>
     </div>
     <div class="card" id="detail"></div>
@@ -29,32 +30,86 @@
 <script src="js/app.js"></script>
 <script>
   const $ = id => document.getElementById(id);
-  let rows = [], selected = null;
+  let rows = [], all = [], selected = null, tab = 'due';
+  const avail = r => Math.max(0, Number(r.credit_limit ?? r.creditLimit) - Number(r.credit_due ?? r.creditDue));
   $('detail').innerHTML = emptyState('Choose a customer to see their credit history.', 'wallet');
 
-  requireLogin().then(() => {
+  requireLogin().then(me => {
+    tab = store.get('credit.tab', 'due');
+    $('tabs').querySelectorAll('button').forEach(b => {
+      b.classList.toggle('on', b.dataset.t === tab);
+      b.onclick = () => { tab = b.dataset.t; store.set('credit.tab', tab); $('tabs').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); draw(); };
+    });
+    if (me.role === 'OWNER') { $('limitBtn').classList.remove('hidden'); $('limitBtn').onclick = () => pickCustomer(); }
     $('csv').onclick = () => downloadCsv('credit_dues_' + isoDate(new Date()) + '.csv', [
-      ['name', 'Customer'], ['mobile', 'Mobile'], ['area', 'Area'], ['credit_due', 'Due'], ['credit_limit', 'Limit'],
+      ['name', 'Customer'], ['mobile', 'Mobile'], ['area', 'Area'], ['credit_due', 'Due'], ['credit_limit', 'Limit'], [r => avail(r).toFixed(2), 'Available'],
       [r => r.last_credit ? fmtDate(r.last_credit) : '', 'Last credit'], [r => r.last_payment ? fmtDate(r.last_payment) : '', 'Last payment']], rows);
     load().then(() => { if (param('id')) show(Number(param('id'))); });
   });
 
   async function load() {
-    rows = await api('/customers/credit-dues');
-    const total = rows.reduce((s, r) => s + Number(r.credit_due), 0);
-    const over = rows.filter(r => Number(r.credit_due) > Number(r.credit_limit)).length;
-    const old = rows.filter(r => r.last_credit && (Date.now() - new Date(r.last_credit)) > 30 * 864e5).length;
-    $('kpis').innerHTML = `<div class="card kpi accent"><div class="label">Total to collect</div><div class="value">${rs0(total)}</div><div class="sub">${rows.length} customers</div></div>
+    all = await api('/customers/credit-dues');
+    const owing = all.filter(r => Number(r.credit_due) > 0);
+    const total = owing.reduce((s, r) => s + Number(r.credit_due), 0);
+    const over = owing.filter(r => Number(r.credit_due) > Number(r.credit_limit)).length;
+    const old = owing.filter(r => r.last_credit && (Date.now() - new Date(r.last_credit)) > 30 * 864e5).length;
+    $('kpis').innerHTML = `<div class="card kpi accent"><div class="label">Total to collect</div><div class="value">${rs0(total)}</div><div class="sub">${owing.length === 1 ? '1 customer owes' : owing.length + ' customers owe'} money</div></div>
       <div class="card kpi"><div class="label">Over their limit</div><div class="value">${over}</div><div class="sub">customers</div></div>
-      <div class="card kpi"><div class="label">Older than 30 days</div><div class="value">${old}</div><div class="sub">since last credit bill</div></div>`;
+      <div class="card kpi"><div class="label">Older than 30 days</div><div class="value">${old}</div><div class="sub">since last credit bill</div></div>
+      <div class="card kpi"><div class="label">Customers with a credit limit</div><div class="value">${all.filter(r => Number(r.credit_limit) > 0).length}</div><div class="sub">can buy on credit</div></div>`;
+    draw();
+  }
+
+  function draw() {
+    rows = tab === 'due' ? all.filter(r => Number(r.credit_due) > 0) : all.filter(r => Number(r.credit_limit) > 0);
     $('body').innerHTML = rows.map(r => `<tr class="clickable ${selected === r.customer_id ? 'selected' : ''}" data-id="${r.customer_id}">
       <td><b>${esc(r.name)}</b>${r.area ? `<div class="small muted">${esc(r.area)}</div>` : ''}</td>
       <td>${esc(r.mobile)}</td>
       <td class="num"><b style="color:${Number(r.credit_due) > Number(r.credit_limit) ? 'var(--err)' : 'inherit'}">${rs(r.credit_due)}</b></td>
-      <td class="num muted">${rs0(r.credit_limit)}</td>
+      <td class="num">${Number(r.credit_limit) > 0 ? rs0(r.credit_limit) : '<span class="muted">none</span>'}</td>
+      <td class="num">${avail(r) > 0 ? `<span style="color:var(--ok)">${rs0(avail(r))}</span>` : '<span class="badge err">0</span>'}</td>
       <td class="small">${r.last_credit ? fmtDate(r.last_credit) : '—'}</td><td class="small">${r.last_payment ? fmtDate(r.last_payment) : '—'}</td></tr>`).join('')
-      || `<tr><td colspan="6">${emptyState('Nobody owes money right now.', 'wallet')}</td></tr>`;
+      || `<tr><td colspan="7">${emptyState(tab === 'due' ? 'Nobody owes money right now.' : 'No customer has a credit limit yet. Use "+ Set credit limit".', 'wallet')}</td></tr>`;
     document.querySelectorAll('tr[data-id]').forEach(tr => tr.onclick = () => show(Number(tr.dataset.id)));
+  }
+
+  /** Owner: find any customer by mobile or name, then set their limit. */
+  function pickCustomer() {
+    const m = openModal(`<h2>Set credit limit</h2>
+      <div class="field"><label>Find customer (mobile or name)</label><input type="search" id="cq" autocomplete="off"></div>
+      <div id="cres" class="stack"></div>
+      <div class="actions"><button data-close>Close</button></div>`);
+    const q = m.el.querySelector('#cq');
+    q.focus();
+    q.oninput = debounce(async () => {
+      const v = q.value.trim();
+      if (v.length < 2) { m.el.querySelector('#cres').innerHTML = ''; return; }
+      const list = await api('/customers?q=' + encodeURIComponent(v));
+      m.el.querySelector('#cres').innerHTML = list.slice(0, 8).map(c => `<button class="row between" style="width:100%" data-c="${c.customer_id}">
+          <span><b>${esc(c.name)}</b> <span class="muted small">${esc(c.mobile)}</span></span><span class="small muted">open</span></button>`).join('')
+        || '<div class="muted small">No customer found. Register them on the Customers page first.</div>';
+      m.el.querySelectorAll('[data-c]').forEach(b => b.onclick = async () => { m.close(); await show(Number(b.dataset.c)); setLimit(await api('/customers/' + b.dataset.c)); });
+    }, 300);
+  }
+
+  function setLimit(c) {
+    const m = openModal(`<h2>Credit limit – ${esc(c.name)}</h2>
+      <p class="muted" style="margin-top:-.4rem">Already due ${rs(c.creditDue)}. The limit is the most this customer may owe at any time; 0 = no credit without the Owner PIN.</p>
+      <form id="f"><div class="field"><label>Credit limit (₹)</label><input type="number" name="creditLimit" min="0" step="100" value="${Number(c.creditLimit)}"></div>
+        <div class="row tight">${[0, 2000, 5000, 10000, 25000].map(v => `<button type="button" class="small" data-v="${v}">${v ? rs0(v) : 'No credit'}</button>`).join('')}</div>
+        <div id="fMsg" style="margin-top:.6rem"></div>
+        <div class="actions"><button type="button" data-close>Cancel</button><button class="primary">Save limit</button></div></form>`);
+    const f = m.el.querySelector('#f');
+    m.el.querySelectorAll('[data-v]').forEach(b => b.onclick = () => { f.creditLimit.value = b.dataset.v; });
+    f.creditLimit.select();
+    f.onsubmit = async e => {
+      e.preventDefault();
+      try {
+        await api(`/customers/${c.id}/credit-limit`, { method: 'PUT', body: { creditLimit: Number(f.creditLimit.value || 0) } });
+        m.close(); toast(`Credit limit for ${c.name} is now ${rs0(f.creditLimit.value || 0)}.`, 'ok');
+        await load(); show(c.id);
+      } catch (err) { formError(f, m.el.querySelector('#fMsg'), err); }
+    };
   }
 
   const TYPE = { SALE: ['Credit bill', 'warn'], REPAYMENT: ['Paid', 'ok'], VOID: ['Bill voided', 'grey'] };
@@ -65,9 +120,15 @@
     const [c, ledger] = await Promise.all([api('/customers/' + id), api(`/customers/${id}/credit`)]);
     $('detail').innerHTML = `<div class="row between"><div><h2 style="margin:0">${esc(c.name)}</h2><div class="muted small">${esc(c.mobile)}</div></div>
         <a class="btn small" href="tel:${esc(c.mobile)}">Call</a></div>
-      <div style="margin:.9rem 0"><div class="muted small">Due now</div><div style="font-size:1.8rem;font-weight:800">${rs(c.creditDue)}</div>
-        <div class="small muted">Limit ${rs0(c.creditLimit)}</div></div>
-      ${Number(c.creditDue) > 0 ? '<button class="primary" id="pay" style="width:100%">Receive payment</button>' : ''}
+      <div class="grid cols-3" style="margin:.9rem 0;gap:.5rem">
+        <div><div class="muted small">Due now</div><div style="font-size:1.45rem;font-weight:800;color:${Number(c.creditDue) > Number(c.creditLimit) ? 'var(--err)' : 'inherit'}">${rs0(c.creditDue)}</div></div>
+        <div><div class="muted small">Limit</div><div style="font-size:1.45rem;font-weight:800">${Number(c.creditLimit) > 0 ? rs0(c.creditLimit) : '—'}</div></div>
+        <div><div class="muted small">Available</div><div style="font-size:1.45rem;font-weight:800;color:${avail(c) > 0 ? 'var(--ok)' : 'var(--err)'}">${rs0(avail(c))}</div></div>
+      </div>
+      <div class="row tight">
+        ${Number(c.creditDue) > 0 ? '<button class="primary grow" id="pay">Receive payment</button>' : ''}
+        ${ME.role === 'OWNER' ? '<button class="grow" id="lim">Change limit</button>' : ''}
+      </div>
       <h3 style="margin-top:1.2rem">History</h3>
       <table><tbody>${ledger.map(t => { const ty = TYPE[t.type]; return `<tr>
         <td><span class="badge ${ty[1]}">${ty[0]}</span><div class="small muted">${fmtDateTime(t.created_at)} · ${esc(t.user_name)}</div>
@@ -77,6 +138,8 @@
         || '<tr><td class="muted small">No credit history yet.</td></tr>'}</tbody></table>`;
     const b = document.getElementById('pay');
     if (b) b.onclick = () => repay(c);
+    const l = document.getElementById('lim');
+    if (l) l.onclick = () => setLimit(c);
   }
 
   function repay(c) {

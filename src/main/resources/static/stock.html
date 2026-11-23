@@ -42,10 +42,13 @@
     $('cat').innerHTML += cats.map(c => `<option value="${c.category_id}">${esc(c.label)}</option>`).join('');
     $('tabs').querySelectorAll('button').forEach(b => b.onclick = () => {
       $('tabs').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
-      filter = b.dataset.f; load();
+      filter = b.dataset.f; store.set('stock.filter', filter); load();
     });
-    if (param('filter')) $('tabs').querySelector(`[data-f="${param('filter')}"]`)?.click();
-    $('cat').onchange = load;
+    $('cat').value = store.get('stock.cat', '');
+    const f0 = param('filter') || store.get('stock.filter', 'all');
+    $('tabs').querySelectorAll('button').forEach(x => x.classList.toggle('on', x.dataset.f === f0));
+    filter = f0;
+    $('cat').onchange = () => { store.set('stock.cat', $('cat').value); load(); };
     $('q').addEventListener('input', debounce(load, 300));
     $('csv').onclick = () => downloadCsv('stock_' + isoDate(new Date()) + '.csv', [
       ['name', 'Item'], ['size', 'Size'], ['colour', 'Colour'], ['sku', 'SKU'], ['barcode', 'Barcode'], ['category', 'Category'],

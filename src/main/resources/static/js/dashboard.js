@@ -2,6 +2,7 @@
 const $ = id => document.getElementById(id);
 
 let GST = true;
+const ALERT_LABEL = { LOW_STOCK: 'Low stock', OUT_OF_STOCK: 'Out of stock', CREDIT_LIMIT: 'Credit limit', VOID_BILL: 'Bill voided' };
 requireLogin(['OWNER']).then(async () => {
   GST = (await shopSettings()).gstRegistered;
   $('refresh').onclick = load;
@@ -38,7 +39,7 @@ async function load() {
   $('gstBody').innerHTML = d.gstByRate.length ? d.gstByRate.map(r => `<tr><td><b>${pct(r.gst_rate)}</b></td>
       <td class="num">${r.qty}</td><td class="num">${rs(r.taxable)}</td><td class="num">${rs(r.cgst)}</td>
       <td class="num">${rs(r.sgst)}</td><td class="num">${rs(r.tax)}</td></tr>`).join('')
-    : '<tr><td colspan="6" class="muted">INFO-REP-001 No bills yet today</td></tr>';
+    : '<tr><td colspan="6" class="muted">No bills yet today.</td></tr>';
   $('payModes').innerHTML = d.payments.map(p => `<span class="badge info" style="font-size:.85rem">${esc(p.mode)}: ${rs0(p.amount)} (${p.count})</span>`).join('') || '<span class="muted small">—</span>';
 
   drawBars(d.last30Days);
@@ -51,7 +52,7 @@ async function load() {
       <td class="num">${v.reorder_level}</td></tr>`).join('');
 
   $('alerts').innerHTML = d.openAlerts.length ? d.openAlerts.map(a => `<div class="msg ${a.severity === 'ERROR' ? 'err' : a.severity === 'WARN' ? 'warn' : 'info'} row between">
-      <span><span class="code">${esc(a.alert_type)}</span>${esc(a.message)} <span class="small muted">${fmtDateTime(a.created_at)}</span></span>
+      <span><b>${esc(ALERT_LABEL[a.alert_type] || 'Alert')}:</b> ${esc(cleanMsg(a.message).replace(/^(LOW STOCK|OUT OF STOCK):\s*/i, ''))} <span class="small muted">${fmtDateTime(a.created_at)}</span></span>
       <button class="small" data-ack="${a.alert_id}">OK</button></div>`).join('')
     : '<div class="muted small">No open alerts. New low-stock / out-of-stock alerts appear here after sales.</div>';
   $('alerts').querySelectorAll('[data-ack]').forEach(b => b.onclick = async () => {
@@ -96,7 +97,7 @@ async function runReport() {
     const r = await api(`/reports/sales?from=${$('from').value}&to=${$('to').value}`);
     const t = r.totals;
     if (!Number(t.bills)) {
-      $('report').innerHTML = '<div class="msg info"><span class="code">INFO-REP-001</span>No transactions found for the selected period.</div>';
+      $('report').innerHTML = '<div class="msg info"><b>Note:</b> No sales in the selected period.</div>';
       return;
     }
     $('report').innerHTML = `<div class="grid cols-3" style="align-items:start">

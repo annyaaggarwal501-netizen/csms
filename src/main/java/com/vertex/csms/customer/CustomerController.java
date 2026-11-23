@@ -38,6 +38,15 @@ public class CustomerController {
         return credit.repay(id, r);
     }
 
+    public record LimitRequest(java.math.BigDecimal creditLimit) {}
+
+    /** Owner sets a customer's credit limit. */
+    @PutMapping("/{id}/credit-limit")
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('OWNER')")
+    public Map<String, Object> setCreditLimit(@PathVariable Long id, @RequestBody LimitRequest r) {
+        return credit.setLimit(id, r.creditLimit());
+    }
+
     /** Everyone who owes money (credit dues report). */
     @GetMapping("/credit-dues")
     public List<Map<String, Object>> creditDues() {

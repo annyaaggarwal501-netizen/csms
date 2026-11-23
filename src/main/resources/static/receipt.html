@@ -34,7 +34,7 @@
             const v = await api('/sales/' + r.saleId + '/void', { method: 'POST', body: { reason } });
             document.getElementById('paper').innerHTML = renderReceipt(v);
             btn.style.display = 'none';
-          } catch (err) { alert((err.code ? err.code + ' ' : '') + err.message); }
+          } catch (err) { alert('Error: ' + cleanMsg(err.message)); }
         };
       }
     } catch (err) {

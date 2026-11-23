@@ -107,6 +107,12 @@
       } else if (results[0]) pick(0);
     });
     document.addEventListener('click', e => { if (!e.target.closest('.scan-box')) $('results').classList.add('hidden'); });
+    const saved = store.get('labels', null);
+    if (saved) {
+      if (!param('ids') && !param('purchase') && Array.isArray(saved.items)) items = saved.items;
+      $('layout').value = saved.layout || $('layout').value;
+      $('showShop').checked = saved.showShop !== false; $('showMrp').checked = saved.showMrp !== false;
+    }
     ['layout', 'showShop', 'showMrp', 'skip'].forEach(id => $(id).onchange = render);
     $('clear').onclick = () => { items = []; render(); };
     $('printBtn').onclick = () => { if (!items.length) toast('Add some items first.', 'warn'); else window.print(); };
@@ -142,6 +148,7 @@
   }
 
   function render() {
+    store.set('labels', { items, layout: $('layout').value, showShop: $('showShop').checked, showMrp: $('showMrp').checked });
     $('list').innerHTML = items.map((v, i) => `<tr>
       <td><b>${esc(v.name)}</b><div class="small muted">${esc(v.size)} / ${esc(v.colour)} · ${esc(v.barcode)}</div></td>
       <td class="num">${rs0(v.selling_price)}</td>

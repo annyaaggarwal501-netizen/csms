@@ -82,4 +82,20 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(ErrorResponse.of("ERR-DB-001",
                 "Database unavailable or transaction failed. Nothing was saved - please try again.", null));
     }
+
+    /**
+     * Anything unexpected (a program bug). The screen gets a clear message with a code instead of a bare
+     * "Request failed (500)"; the full details go to the server log (Render: Logs).
+     */
+    @ExceptionHandler(RuntimeException.class)
+    public ResponseEntity<ErrorResponse> handleUnexpected(RuntimeException ex) {
+        if (ex instanceof org.springframework.web.ErrorResponse framework) {      // e.g. 404 / 405 from Spring itself
+            return ResponseEntity.status(framework.getStatusCode()).body(ErrorResponse.of("ERR-SYS-003",
+                    framework.getBody().getDetail() == null ? "Request not allowed." : framework.getBody().getDetail(), null));
+        }
+        log.error("Unexpected error", ex);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ErrorResponse.of("ERR-SYS-002",
+                "Something went wrong on the server and nothing was saved. Please try again; if it happens again, "
+                        + "tell the team what you clicked.", null));
+    }
 }

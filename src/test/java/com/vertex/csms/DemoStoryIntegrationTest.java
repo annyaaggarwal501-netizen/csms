@@ -508,6 +508,104 @@ class DemoStoryIntegrationTest {
         assertLedgerConsistent();
     }
 
+    @Test
+    void ownerAddsCategoriesAndSubCategories() throws Exception {
+        MockHttpSession owner = httpLogin("owner", "Owner@123");
+        String main = "Festive " + System.nanoTime() % 100000;
+        String body = mvc.perform(post("/api/v1/categories").session(owner).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"" + main + "\",\"parentId\":null,\"active\":true}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.parent_id").doesNotExist())
+                .andReturn().getResponse().getContentAsString();
+        long mainId = new com.fasterxml.jackson.databind.ObjectMapper().readTree(body).get("category_id").asLong();
+
+        // the bug: every sub-category add failed with a 500 error
+        String sub = mvc.perform(post("/api/v1/categories").session(owner).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Party Wear\",\"parentId\":" + mainId + ",\"active\":true}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.label").value(main + " > Party Wear"))
+                .andReturn().getResponse().getContentAsString();
+        long subId = new com.fasterxml.jackson.databind.ObjectMapper().readTree(sub).get("category_id").asLong();
+        mvc.perform(post("/api/v1/categories").session(owner).contentType(MediaType.APPLICATION_JSON)        // existing main one
+                        .content("{\"name\":\"Kurtis\",\"parentId\":1,\"active\":true}"))
+                .andExpect(status().isConflict());
+
+        mvc.perform(post("/api/v1/categories").session(owner).contentType(MediaType.APPLICATION_JSON)        // duplicate
+                        .content("{\"name\":\"party wear\",\"parentId\":" + mainId + ",\"active\":true}"))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.field").value("name"));
+        mvc.perform(post("/api/v1/categories").session(owner).contentType(MediaType.APPLICATION_JSON)        // 3rd level
+                        .content("{\"name\":\"Too Deep\",\"parentId\":" + subId + ",\"active\":true}"))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.field").value("parentId"));
+        mvc.perform(post("/api/v1/categories").session(owner).contentType(MediaType.APPLICATION_JSON)        // unknown parent
+                        .content("{\"name\":\"Orphan\",\"parentId\":999999,\"active\":true}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/v1/categories/" + mainId)
+                        .session(owner).contentType(MediaType.APPLICATION_JSON)                                 // main with subs
+                        .content("{\"name\":\"" + main + "\",\"parentId\":1,\"active\":true}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/v1/categories/" + subId)
+                        .session(owner).contentType(MediaType.APPLICATION_JSON)                                 // rename: OK
+                        .content("{\"name\":\"Party Wear\",\"parentId\":" + mainId + ",\"active\":false}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.is_active").value(false));
+        mvc.perform(post("/api/v1/categories").session(httpLogin("staff", "Staff@123")).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Staff Try\",\"parentId\":null}"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void creditLimitIsAppliedOnTheBill() {
+        long customer = customerId();
+        login(OWNER);
+        credit.setLimit(customer, new BigDecimal("1500"));
+        login(STAFF);
+        BigDecimal dueBefore = due(customer);
+        assertThat(dueBefore).isEqualByComparingTo("0");
+        // 1 kurti (Rs 1,050) fits inside the Rs 1,500 limit
+        billing.complete(new CompleteRequest(customer, List.of(line(1, 1)), List.of(pay(PaymentMode.CREDIT, "1050")), null));
+        // a second one would make Rs 2,100 due: staff are stopped ...
+        assertCode(() -> billing.complete(new CompleteRequest(customer, List.of(line(1, 1)),
+                List.of(pay(PaymentMode.CREDIT, "1050")), null)), "ERR-CUS-003");
+        assertCode(() -> billing.complete(new CompleteRequest(customer, List.of(line(1, 1)),
+                List.of(pay(PaymentMode.CREDIT, "1050")), "0000")), "ERR-CUS-003");          // wrong PIN
+        assertThat(due(customer)).isEqualByComparingTo("1050");
+        // ... part in cash is fine (450 credit + 600 cash keeps it at the limit)
+        billing.complete(new CompleteRequest(customer, List.of(line(1, 1)),
+                List.of(pay(PaymentMode.CREDIT, "450"), pay(PaymentMode.CASH, "600")), null));
+        assertThat(due(customer)).isEqualByComparingTo("1500");
+        // ... and the Owner PIN approves going over
+        var over = billing.complete(new CompleteRequest(customer, List.of(line(1, 1)), List.of(pay(PaymentMode.CREDIT, "1050")), "2580"));
+        assertThat(over.warnings()).anyMatch(w -> w.contains("over the credit limit"));
+        assertThat(due(customer)).isEqualByComparingTo("2550");
+        assertThat(count("audit_log WHERE action = 'CREDIT_LIMIT_OVERRIDE'")).isGreaterThanOrEqualTo(1);
+        // staff cannot change limits
+        assertThatThrownBy(() -> credit.setLimit(customer, new BigDecimal("99999")));
+        login(OWNER);
+        credit.setLimit(customer, new BigDecimal("5000"));
+        jdbc.update("UPDATE customer SET credit_due = 0 WHERE customer_id = ?", customer);
+    }
+
+    @Test
+    void newCustomerCanGetACreditLimitAtTheCounter() throws Exception {
+        MockHttpSession staff = httpLogin("staff", "Staff@123");
+        MockHttpSession owner = httpLogin("owner", "Owner@123");
+        String body = "{\"name\":\"Kiran Devi\",\"mobile\":\"%s\",\"area\":\"Behror\",\"creditLimit\":3000%s}";
+        mvc.perform(post("/api/v1/customers").session(staff).contentType(MediaType.APPLICATION_JSON)
+                        .content(String.format(body, "9876500011", "")))
+                .andExpect(status().isForbidden()).andExpect(jsonPath("$.field").value("ownerPin"));
+        mvc.perform(post("/api/v1/customers").session(staff).contentType(MediaType.APPLICATION_JSON)
+                        .content(String.format(body, "9876500011", ",\"ownerPin\":\"1111\"")))
+                .andExpect(status().isForbidden()).andExpect(jsonPath("$.message").value("The Owner PIN is not correct."));
+        assertThat(count("customer WHERE mobile = '9876500011'")).isZero();       // nothing saved
+        mvc.perform(post("/api/v1/customers").session(staff).contentType(MediaType.APPLICATION_JSON)
+                        .content(String.format(body, "9876500011", ",\"ownerPin\":\"2580\"")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.creditLimit").value(3000));
+        mvc.perform(post("/api/v1/customers").session(owner).contentType(MediaType.APPLICATION_JSON)
+                        .content(String.format(body, "9876500012", "")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.creditLimit").value(3000));
+        mvc.perform(post("/api/v1/customers").session(staff).contentType(MediaType.APPLICATION_JSON)   // no limit: no PIN needed
+                        .content("{\"name\":\"Kiran Devi\",\"mobile\":\"9876500013\",\"creditLimit\":0}"))
+                .andExpect(status().isOk());
+        assertThat(count("audit_log WHERE action = 'CREDIT_LIMIT_CHANGED' AND details LIKE 'New customer Kiran Devi%'")).isEqualTo(2);
+    }
+
     private BigDecimal due(long customer) {
         return jdbc.queryForObject("SELECT credit_due FROM customer WHERE customer_id = ?", BigDecimal.class, customer);
     }

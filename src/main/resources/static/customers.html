@@ -15,7 +15,6 @@
     <h1 style="margin:0">Customers</h1>
     <button class="primary" id="addBtn">+ Register customer</button>
   </div>
-  <div class="msg warn small">The 30 seed customers are <b>dummy records with random numbers</b>. They are not opted in, so the app will never message them. Use only the team test customers for WhatsApp.</div>
   <div class="card row">
     <input type="search" id="q" placeholder="Search name, mobile or area" class="grow" style="width:auto">
     <label class="checkbox"><input type="checkbox" id="optOnly"> WhatsApp opted-in only</label>
@@ -38,7 +37,8 @@
 
   requireLogin().then(() => {
     $('q').addEventListener('input', debounce(load, 250));
-    $('optOnly').onchange = load;
+    $('optOnly').checked = store.get('customers.optOnly', false);
+    $('optOnly').onchange = () => { store.set('customers.optOnly', $('optOnly').checked); load(); };
     $('addBtn').onclick = () => register();
     if (window.innerWidth < 900) $('layout').style.gridTemplateColumns = '1fr';
     load();
