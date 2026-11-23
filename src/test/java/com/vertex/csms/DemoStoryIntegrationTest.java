@@ -562,9 +562,9 @@ class DemoStoryIntegrationTest {
         billing.complete(new CompleteRequest(customer, List.of(line(1, 1)), List.of(pay(PaymentMode.CREDIT, "1050")), null));
         // a second one would make Rs 2,100 due: staff are stopped ...
         assertCode(() -> billing.complete(new CompleteRequest(customer, List.of(line(1, 1)),
-                List.of(pay(PaymentMode.CREDIT, "1050")), null)), "ERR-CUS-002");
+                List.of(pay(PaymentMode.CREDIT, "1050")), null)), "ERR-CUS-003");
         assertCode(() -> billing.complete(new CompleteRequest(customer, List.of(line(1, 1)),
-                List.of(pay(PaymentMode.CREDIT, "1050")), "0000")), "ERR-CUS-002");          // wrong PIN
+                List.of(pay(PaymentMode.CREDIT, "1050")), "0000")), "ERR-CUS-003");          // wrong PIN
         assertThat(due(customer)).isEqualByComparingTo("1050");
         // ... part in cash is fine (450 credit + 600 cash keeps it at the limit)
         billing.complete(new CompleteRequest(customer, List.of(line(1, 1)),
@@ -580,6 +580,30 @@ class DemoStoryIntegrationTest {
         login(OWNER);
         credit.setLimit(customer, new BigDecimal("5000"));
         jdbc.update("UPDATE customer SET credit_due = 0 WHERE customer_id = ?", customer);
+    }
+
+    @Test
+    void newCustomerCanGetACreditLimitAtTheCounter() throws Exception {
+        MockHttpSession staff = httpLogin("staff", "Staff@123");
+        MockHttpSession owner = httpLogin("owner", "Owner@123");
+        String body = "{\"name\":\"Kiran Devi\",\"mobile\":\"%s\",\"area\":\"Behror\",\"creditLimit\":3000%s}";
+        mvc.perform(post("/api/v1/customers").session(staff).contentType(MediaType.APPLICATION_JSON)
+                        .content(String.format(body, "9876500011", "")))
+                .andExpect(status().isForbidden()).andExpect(jsonPath("$.field").value("ownerPin"));
+        mvc.perform(post("/api/v1/customers").session(staff).contentType(MediaType.APPLICATION_JSON)
+                        .content(String.format(body, "9876500011", ",\"ownerPin\":\"1111\"")))
+                .andExpect(status().isForbidden()).andExpect(jsonPath("$.message").value("The Owner PIN is not correct."));
+        assertThat(count("customer WHERE mobile = '9876500011'")).isZero();       // nothing saved
+        mvc.perform(post("/api/v1/customers").session(staff).contentType(MediaType.APPLICATION_JSON)
+                        .content(String.format(body, "9876500011", ",\"ownerPin\":\"2580\"")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.creditLimit").value(3000));
+        mvc.perform(post("/api/v1/customers").session(owner).contentType(MediaType.APPLICATION_JSON)
+                        .content(String.format(body, "9876500012", "")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.creditLimit").value(3000));
+        mvc.perform(post("/api/v1/customers").session(staff).contentType(MediaType.APPLICATION_JSON)   // no limit: no PIN needed
+                        .content("{\"name\":\"Kiran Devi\",\"mobile\":\"9876500013\",\"creditLimit\":0}"))
+                .andExpect(status().isOk());
+        assertThat(count("audit_log WHERE action = 'CREDIT_LIMIT_CHANGED' AND details LIKE 'New customer Kiran Devi%'")).isEqualTo(2);
     }
 
     private BigDecimal due(long customer) {

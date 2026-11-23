@@ -219,10 +219,10 @@ public class BillingService {
             BigDecimal available = customer.getCreditLimit().subtract(customer.getCreditDue()).max(BigDecimal.ZERO);
             if (!CurrentUser.isOwner() && !ownerPin.matches(req.ownerPin())) {
                 if (req.ownerPin() != null && !req.ownerPin().isBlank()) {
-                    throw new ApiException(HttpStatus.FORBIDDEN, "ERR-CUS-002", "The Owner PIN is not correct. "
+                    throw new ApiException(HttpStatus.FORBIDDEN, "ERR-CUS-003", "The Owner PIN is not correct. "
                             + customer.getName() + " can take only Rs " + available + " more on credit.", "ownerPin");
                 }
-                throw new ApiException(HttpStatus.FORBIDDEN, "ERR-CUS-002", customer.getName() + " can take only Rs "
+                throw new ApiException(HttpStatus.FORBIDDEN, "ERR-CUS-003", customer.getName() + " can take only Rs "
                         + available + " more on credit (limit Rs " + customer.getCreditLimit() + ", already due Rs "
                         + customer.getCreditDue() + "). Ask the Owner to approve with the PIN, or take the rest in cash/UPI.",
                         "creditLimit");

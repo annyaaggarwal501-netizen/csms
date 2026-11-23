@@ -401,16 +401,28 @@ function showRegister(mobile) {
     <label class="checkbox"><input type="checkbox" id="rOpt"> Customer agrees to receive bills & offers on WhatsApp</label>
     <div class="field hidden" id="rMethodBox" style="margin-top:.4rem"><label>How was consent given?</label>
       <select id="rMethod"><option value="IN_STORE_VERBAL">Said yes at the counter</option><option value="SIGNED_FORM">Signed form</option><option value="QR_SCAN">Scanned shop QR</option></select></div>
+    <div class="field" style="margin-top:.6rem"><label>Credit (udhaar) limit ₹ <span class="muted">(optional)</span></label>
+      <input type="number" id="rLimit" min="0" step="100" placeholder="0 = no credit">
+      <div class="row tight" style="margin-top:.35rem">${[0, 2000, 5000, 10000].map(v => `<button type="button" class="small" data-lim="${v}">${v ? rs0(v) : 'No credit'}</button>`).join('')}</div>
+      <div class="hint">${ME.role === 'OWNER' ? 'The most this customer may owe at any time.' : 'Setting a limit needs the Owner PIN.'}</div></div>
     <div id="rErr"></div>
     <div class="row" style="margin-top:.5rem"><button class="primary" id="rSave">Register & attach</button><button id="rCancel">Cancel</button></div>`;
   $('rName').focus();
   $('rOpt').onchange = () => $('rMethodBox').classList.toggle('hidden', !$('rOpt').checked);
   $('rCancel').onclick = () => { $('custMsg').innerHTML = ''; };
+  document.querySelectorAll('[data-lim]').forEach(b => b.onclick = () => { $('rLimit').value = b.dataset.lim; });
   $('rSave').onclick = async () => {
+    const creditLimit = Number($('rLimit').value || 0);
+    let pin = null;
+    if (creditLimit > 0 && ME.role !== 'OWNER') {
+      pin = await askOwnerPin(`Give ${$('rName').value.trim() || 'this customer'} a credit limit of ${rs0(creditLimit)}?`);
+      if (!pin) return;
+    }
     try {
       const c = await api('/customers', { method: 'POST', body: {
         name: $('rName').value, mobile, area: $('rArea').value,
-        waOptIn: $('rOpt').checked, consentMethod: $('rOpt').checked ? $('rMethod').value : null } });
+        waOptIn: $('rOpt').checked, consentMethod: $('rOpt').checked ? $('rMethod').value : null,
+        creditLimit, ownerPin: pin } });
       $('custMsg').innerHTML = '';
       toast('Customer registered', 'ok');
       setCustomer(c);
@@ -458,7 +470,7 @@ async function complete() {
     store.del('posDraft');
     showDone(res);
   } catch (err) {
-    if (err.code === 'ERR-BIL-005' || err.code === 'ERR-CUS-002') state.ownerPin = null;
+    if (err.code === 'ERR-BIL-005' || err.code === 'ERR-CUS-003') state.ownerPin = null;
     $('saleErr').innerHTML = errorHtml(err);
     if (err.code === 'ERR-INV-001') requote();
   } finally {

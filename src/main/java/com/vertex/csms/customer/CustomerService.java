@@ -17,14 +17,18 @@ public class CustomerService {
 
     private final CustomerRepository customers;
     private final com.vertex.csms.common.AuditService audit;
+    private final com.vertex.csms.security.OwnerPinService ownerPin;
 
-    public CustomerService(CustomerRepository customers, com.vertex.csms.common.AuditService audit) {
+    public CustomerService(CustomerRepository customers, com.vertex.csms.common.AuditService audit,
+                           com.vertex.csms.security.OwnerPinService ownerPin) {
         this.customers = customers;
         this.audit = audit;
+        this.ownerPin = ownerPin;
     }
 
     public record CustomerRequest(String name, String mobile, String area, LocalDate birthday, LocalDate anniversary,
-                                  Boolean waOptIn, ConsentMethod consentMethod, BigDecimal creditLimit) {}
+                                  Boolean waOptIn, ConsentMethod consentMethod, BigDecimal creditLimit,
+                                  String ownerPin) {}
 
     public record ConsentRequest(boolean optIn, ConsentMethod method) {}
 
@@ -59,7 +63,12 @@ public class CustomerService {
             }
             c.setConsent(true, req.consentMethod(), CurrentUser.id());
         }
-        return customers.save(c);
+        Customer saved = customers.save(c);
+        if (saved.getCreditLimit().signum() > 0) {
+            audit.log("CREDIT_LIMIT_CHANGED", "customer", saved.getId(), "New customer " + saved.getName()
+                    + ": limit Rs " + saved.getCreditLimit() + (CurrentUser.isOwner() ? "" : " (approved with Owner PIN)"));
+        }
+        return saved;
     }
 
     @Transactional
@@ -100,10 +109,18 @@ public class CustomerService {
         c.setArea(req.area() == null || req.area().isBlank() ? null : req.area().trim());
         c.setBirthday(req.birthday());
         c.setAnniversary(req.anniversary());
-        // Only the Owner decides credit limits.
-        if (req.creditLimit() != null && CurrentUser.isOwner()) {
-            if (req.creditLimit().signum() < 0) {
-                throw ApiException.badRequest("ERR-VAL-001", "Credit limit cannot be negative.", "creditLimit");
+        // Only the Owner decides credit limits: the Owner directly, staff with the Owner PIN (e.g. at the counter).
+        boolean changes = req.creditLimit() != null && c.getCreditLimit().compareTo(req.creditLimit()) != 0;
+        if (changes && !CurrentUser.isOwner() && !ownerPin.matches(req.ownerPin())) {
+            throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN, "ERR-ACC-003",
+                    req.ownerPin() == null || req.ownerPin().isBlank()
+                            ? "Only the Owner can set a credit limit. Ask the Owner to enter the PIN."
+                            : "The Owner PIN is not correct.", "ownerPin");
+        }
+        if (changes) {
+            if (req.creditLimit().signum() < 0 || req.creditLimit().scale() > 2
+                    || req.creditLimit().compareTo(BigDecimal.valueOf(10_000_000)) > 0) {
+                throw ApiException.badRequest("ERR-VAL-001", "Enter a credit limit from 0 to 1,00,00,000.", "creditLimit");
             }
             if (c.getId() != null && c.getCreditLimit().compareTo(req.creditLimit()) != 0) {
                 audit.log("CREDIT_LIMIT_CHANGED", "customer", c.getId(), c.getName() + ": Rs " + c.getCreditLimit()
