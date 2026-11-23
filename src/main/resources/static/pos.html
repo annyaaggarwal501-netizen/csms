@@ -89,11 +89,14 @@
           <button class="small" id="addPay">+ Split payment</button>
         </div>
         <div id="payRows"></div>
-        <div id="cashBox" class="row" style="margin-top:.3rem">
-          <label class="grow" style="margin:0">Cash received
-            <input type="number" id="cashGiven" min="0" step="1" placeholder="for change">
-          </label>
-          <div class="grow"><div class="muted small">Change to return</div><div id="change" style="font-size:1.3rem;font-weight:700">₹0</div></div>
+        <div id="cashBox" style="margin-top:.3rem">
+          <div class="row">
+            <label class="grow" style="margin:0">Cash received from customer
+              <input type="number" id="cashGiven" min="0" step="1" placeholder="type the cash you got">
+            </label>
+            <div class="grow"><div class="muted small">Change to return</div><div id="change" style="font-size:1.3rem;font-weight:700">₹0</div></div>
+          </div>
+          <div class="row tight" id="cashQuick" style="margin-top:.4rem"></div>
         </div>
         <div id="payMsg" style="margin-top:.5rem"></div>
         <div id="saleErr" style="margin-top:.5rem"></div>

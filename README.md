@@ -238,6 +238,8 @@ A Postman collection is in `docs/CSMS.postman_collection.json`.
   - Gender comes from the category's parent. Innerwear, blouses, nightwear and infant wear default to non-returnable.
   - `db/sample_import_new_products.csv` is a ready-made demo file: 8 good rows, 3 deliberately bad.
 - **Payments.** Cash (with change), UPI, Card, Credit (needs a customer, see the credit limit below) and Credit note (balance and expiry are checked). Split payments are allowed. A cash row has no reference box; UPI, card, credit and credit note rows do.
+  A bill can be saved only when the payments add up to the total and, for the cash part, the **cash received** from the
+  customer is at least that amount (quick buttons: Exact, ₹100/₹500/₹2,000 rounded up); the change to return is shown.
 - **Stock.** Every change goes through `StockService`, which writes `stock_movement`. Stock cannot go negative (ERR-INV-001). LOW_STOCK and OUT_OF_STOCK alerts are raised without duplicates and close themselves after a stock-in. Stock-in updates the weighted-average cost.
 - **Returns.** Only within 7 days; after that the Owner PIN is needed (WARN-RET-001). Non-returnable items are blocked (ERR-RET-003), and you can't return more than was sold (ERR-RET-001). Returned items go back into stock; a "defective" tick writes them off instead. The credit note is valid for 90 days. Loyalty points are reversed. "Exchange" opens the POS with the credit note already applied as a payment.
 - **Credit (udhaar).** A credit bill adds to the customer's due and writes a SALE row to `customer_credit_txn`; a payment
