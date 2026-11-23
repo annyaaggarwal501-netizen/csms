@@ -9,8 +9,10 @@ https://csms-9qy1.onrender.com/login.html?next=pos.html
 
 ### 🔐 Live Demo Credentials
 
-- **Username:** `owner`
-- **Password:** `Mansi2026shop`
+| Role | Username | Password |
+|---|---|---|
+| Owner (everything) | `owner` | `Mansi2026shop` |
+| Sales staff (billing, returns, customers, stock view) | `staff` | `Staff2026shop` |
 
 > These credentials are for accessing the live demo application.
 
@@ -100,7 +102,7 @@ Flyway rebuilds V1–V5. On Neon, prefer a separate branch for experiments inste
 ### Tests
 ```bash
 ./mvnw test                 # 14 GST unit tests (no database needed); the integration tests are skipped
-./mvnw test -Dit.db=true    # + 16 integration tests on a LOCAL PostgreSQL (db/create_db_user.sql), never on Neon
+./mvnw test -Dit.db=true    # + 19 integration tests on a LOCAL PostgreSQL (db/create_db_user.sql), never on Neon
 scripts/race_test.sh        # app must be running; two counters, one last piece, by real HTTP calls
 ```
 The integration tests use their own database, `clothing_shop_test`, which Flyway wipes and rebuilds on every run. They cover:
@@ -118,6 +120,9 @@ The integration tests use their own database, `clothing_shop_test`, which Flyway
 - profit using the cost price on the day of sale
 - a new staff login must change its temporary password first
 - owner-only settings and stock adjustments over HTTP, activity log
+- adding main categories and sub-categories (duplicates, only two levels)
+- credit limit applied on the bill (staff stopped, Owner PIN approves, part cash allowed)
+- setting a credit limit while registering a new customer (Owner, or staff with the Owner PIN)
 
 Every test also checks that the stock history still adds up.
 
@@ -133,10 +138,10 @@ The app can be **installed** like an app (Chrome → Install app / Add to Home s
 |---|---|---|
 | Login (shop name from Settings) | `login.html` | everyone |
 | Dashboard: today, 30-day chart, low stock, alerts, credit to collect | `dashboard.html` | Owner |
-| New bill (POS): scan, search, **tap a product photo → choose colour & size**, hold/resume | `pos.html` | both |
+| New bill (POS): scan, search, **tap a product photo → choose colour & size**, hold/resume, register a new customer with a credit limit; an unfinished bill is remembered if the page is refreshed | `pos.html` | both |
 | Returns + credit note / exchange | `returns.html` | both |
 | Customers (consent, history) | `customers.html` | both |
-| **Credit (udhaar)**: who owes what, history, receive payment | `credit.html` | both |
+| **Credit (udhaar)**: due / limit / available, history, receive payment, **Set credit limit** (Owner) | `credit.html` | both (limits: Owner) |
 | Products with photos, WhatsApp share, CSV/Excel import, bulk photos | `products.html` | both (staff: no cost) |
 | Add/edit product (size × colour grid, photo in the same form) | `product-edit.html` | Owner edits, staff view |
 | **Stock**: every size/colour, low/out filters, history of each item, adjust (damaged, lost, count) | `stock.html` | both (adjust and values: Owner) |
@@ -154,6 +159,8 @@ The app can be **installed** like an app (Chrome → Install app / Add to Home s
 
 ### API
 All endpoints are under `/api/v1`. Errors come back as `{code, message, field, timestamp}` using the SRS error codes.
+On screen, people see only the kind of message and the text ("Error: …", "Warning: …", "Note: …"); the codes stay in the API
+and the server log.
 
 | Method | Endpoint | Who |
 |---|---|---|
@@ -173,6 +180,7 @@ All endpoints are under `/api/v1`. Errors come back as `{code, message, field, t
 | GET | `/customers?mobile=` / `?q=`, `/customers/lookup?mobile=`, `/customers/{id}/history` | Owner, Staff |
 | POST / PUT | `/customers`, `/customers/{id}`, `/customers/{id}/consent` | Owner, Staff |
 | GET / POST | `/customers/credit-dues`, `/customers/{id}/credit`, `/customers/{id}/credit/repay` `{amount, mode, note}` | Owner, Staff |
+| PUT | `/customers/{id}/credit-limit` `{creditLimit}` | Owner |
 | GET / POST | `/returns/lookup?invoice=`, `/returns` · GET `/credit-notes/{cnNo}` | Owner, Staff |
 | POST / GET | `/whatsapp/ebill/{saleId}`, `/whatsapp/product/{id}`, `/whatsapp/log` | Owner, Staff |
 | GET | `/reports/dashboard`, `/reports/sales?from=&to=`, `/reports/sales.xlsx?from=&to=`, `/reports/profit?from=&to=`, `/reports/stock-value`, `/reports/staff?from=&to=` | Owner |
@@ -229,12 +237,20 @@ A Postman collection is in `docs/CSMS.postman_collection.json`.
   - **Import** saves the good rows in one transaction. Rows for the same product name and category become one product. An existing product gets the new sizes and colours added.
   - Gender comes from the category's parent. Innerwear, blouses, nightwear and infant wear default to non-returnable.
   - `db/sample_import_new_products.csv` is a ready-made demo file: 8 good rows, 3 deliberately bad.
-- **Payments.** Cash (with change), UPI, Card, Credit (needs a customer; warns when over the limit) and Credit note (balance and expiry are checked). Split payments are allowed.
+- **Payments.** Cash (with change), UPI, Card, Credit (needs a customer, see the credit limit below) and Credit note (balance and expiry are checked). Split payments are allowed. A cash row has no reference box; UPI, card, credit and credit note rows do.
 - **Stock.** Every change goes through `StockService`, which writes `stock_movement`. Stock cannot go negative (ERR-INV-001). LOW_STOCK and OUT_OF_STOCK alerts are raised without duplicates and close themselves after a stock-in. Stock-in updates the weighted-average cost.
 - **Returns.** Only within 7 days; after that the Owner PIN is needed (WARN-RET-001). Non-returnable items are blocked (ERR-RET-003), and you can't return more than was sold (ERR-RET-001). Returned items go back into stock; a "defective" tick writes them off instead. The credit note is valid for 90 days. Loyalty points are reversed. "Exchange" opens the POS with the credit note already applied as a payment.
 - **Credit (udhaar).** A credit bill adds to the customer's due and writes a SALE row to `customer_credit_txn`; a payment
   (cash/UPI/card) writes a REPAYMENT row; voiding a credit bill writes a VOID row. Every row keeps the balance after it,
   so the amount owed can always be explained. Existing credit was copied into the ledger by V8.
+- **Credit limit.** Each customer has a limit (the most they may owe; 0 = no credit). On a bill, staff cannot put more on
+  credit than the available amount (limit − already due): they take the rest in cash/UPI, or the Owner approves with the PIN
+  (ERR-CUS-003). The Owner can go over it after a confirmation. Overrides go to the activity log and the dashboard alerts.
+  The Owner sets limits on the Credit page or the customer form; a limit can also be set while registering a new customer on
+  New bill (staff need the Owner PIN). Every change is in the activity log.
+- **Remembered on this device.** The unfinished bill (items, customer, payments) survives a refresh or closed tab and comes
+  back with fresh prices; chosen filters and tabs (Stock, Reports, Offers, Credit, Customers), the barcode label list and the
+  last username are remembered too. Stored per user in the browser; never prices, stock or passwords.
 - **Profit.** Each bill line saves the item's cost price at the moment of sale (`sale_line.unit_cost`, V8), so a later
   purchase at a different cost does not change old profit. Profit = sale value without GST − cost; returned pieces are left out.
 - **Stock adjustments.** Owner only, with a reason (Damaged, Lost, Counting correction, Sample, Other + note). Written as an
