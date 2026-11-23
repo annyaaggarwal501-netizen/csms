@@ -52,7 +52,7 @@
         <div><h2 style="margin:0">${esc(b.invoiceNo)} <span class="badge ${b.status === 'COMPLETED' ? 'ok' : 'warn'}">${esc(b.status)}</span></h2>
           <div class="muted small">${fmtDateTime(b.completedAt)} · ${lookup.daysSinceSale} day(s) ago · ${esc(b.customerName || 'Walk-in')} · Total ${rs0(b.grandTotal)}</div></div>
         <a class="btn small" target="_blank" href="receipt.html?id=${b.saleId}&dup=1">View bill</a></div>
-      ${lookup.needsOwnerPin ? `<div class="msg warn" style="margin-top:.6rem"><span class="code">WARN-RET-001</span>This bill is older than the ${lookup.returnWindowDays}-day return window. The Owner PIN is needed.</div>` : ''}
+      ${lookup.needsOwnerPin ? `<div class="msg warn" style="margin-top:.6rem"><b>Warning:</b> This bill is older than the ${lookup.returnWindowDays}-day return window. The Owner PIN is needed.</div>` : ''}
       ${!lookup.returnable ? '<div class="msg err" style="margin-top:.6rem">This bill has nothing left to return.</div>' : ''}
       <div class="table-wrap" style="margin-top:.6rem"><table>
         <thead><tr><th></th><th>Item</th><th class="num">Sold</th><th class="num">Returned</th><th class="num">Paid / pc</th><th class="num">Return qty</th><th>Defective</th></tr></thead>
@@ -61,7 +61,7 @@
           const can = l.returnable && left > 0 && lookup.returnable;
           return `<tr><td><input type="checkbox" data-pick="${l.lineId}" ${can ? '' : 'disabled'}></td>
             <td><b>${esc(l.productName)}</b> ${esc(l.size)}/${esc(l.colour)}<div class="small muted">${esc(l.sku)} · GST ${pct(l.gstRate)}</div>
-              ${!l.returnable ? '<span class="badge err">ERR-RET-003 Non-returnable</span>' : ''}</td>
+              ${!l.returnable ? '<span class="badge err">Non-returnable</span>' : ''}</td>
             <td class="num">${l.quantity}</td><td class="num">${l.returnedQty}</td>
             <td class="num">${rs(Number(l.unitPrice) - Number(l.unitDiscount))}</td>
             <td class="num"><input type="number" data-qty="${l.lineId}" min="1" max="${left}" value="${left > 0 ? 1 : 0}" style="width:70px;text-align:right" ${can ? '' : 'disabled'}></td>

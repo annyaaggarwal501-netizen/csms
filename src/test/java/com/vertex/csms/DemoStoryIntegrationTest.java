@@ -550,6 +550,38 @@ class DemoStoryIntegrationTest {
                 .andExpect(status().isForbidden());
     }
 
+    @Test
+    void creditLimitIsAppliedOnTheBill() {
+        long customer = customerId();
+        login(OWNER);
+        credit.setLimit(customer, new BigDecimal("1500"));
+        login(STAFF);
+        BigDecimal dueBefore = due(customer);
+        assertThat(dueBefore).isEqualByComparingTo("0");
+        // 1 kurti (Rs 1,050) fits inside the Rs 1,500 limit
+        billing.complete(new CompleteRequest(customer, List.of(line(1, 1)), List.of(pay(PaymentMode.CREDIT, "1050")), null));
+        // a second one would make Rs 2,100 due: staff are stopped ...
+        assertCode(() -> billing.complete(new CompleteRequest(customer, List.of(line(1, 1)),
+                List.of(pay(PaymentMode.CREDIT, "1050")), null)), "ERR-CUS-002");
+        assertCode(() -> billing.complete(new CompleteRequest(customer, List.of(line(1, 1)),
+                List.of(pay(PaymentMode.CREDIT, "1050")), "0000")), "ERR-CUS-002");          // wrong PIN
+        assertThat(due(customer)).isEqualByComparingTo("1050");
+        // ... part in cash is fine (450 credit + 600 cash keeps it at the limit)
+        billing.complete(new CompleteRequest(customer, List.of(line(1, 1)),
+                List.of(pay(PaymentMode.CREDIT, "450"), pay(PaymentMode.CASH, "600")), null));
+        assertThat(due(customer)).isEqualByComparingTo("1500");
+        // ... and the Owner PIN approves going over
+        var over = billing.complete(new CompleteRequest(customer, List.of(line(1, 1)), List.of(pay(PaymentMode.CREDIT, "1050")), "2580"));
+        assertThat(over.warnings()).anyMatch(w -> w.contains("over the credit limit"));
+        assertThat(due(customer)).isEqualByComparingTo("2550");
+        assertThat(count("audit_log WHERE action = 'CREDIT_LIMIT_OVERRIDE'")).isGreaterThanOrEqualTo(1);
+        // staff cannot change limits
+        assertThatThrownBy(() -> credit.setLimit(customer, new BigDecimal("99999")));
+        login(OWNER);
+        credit.setLimit(customer, new BigDecimal("5000"));
+        jdbc.update("UPDATE customer SET credit_due = 0 WHERE customer_id = ?", customer);
+    }
+
     private BigDecimal due(long customer) {
         return jdbc.queryForObject("SELECT credit_due FROM customer WHERE customer_id = ?", BigDecimal.class, customer);
     }

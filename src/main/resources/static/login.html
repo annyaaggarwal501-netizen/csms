@@ -36,6 +36,7 @@
 <script src="js/app.js"></script>
 <script>
   const pw = document.getElementById('password');
+  try { const u = localStorage.getItem('csms:lastUser'); if (u) { document.getElementById('username').value = u; pw.focus(); } } catch (e) { /* ignore */ }
   api('/public/login-info').then(i => {
     document.getElementById('shopName').textContent = i.shopName;
     document.getElementById('mark').textContent = (i.shopName || 'S')[0];
@@ -53,6 +54,7 @@
     try {
       const me = await api('/auth/login', { method: 'POST', body: {
         username: document.getElementById('username').value, password: pw.value } });
+      try { localStorage.setItem('csms:lastUser', me.username); } catch (e) { /* ignore */ }
       const next = param('next');
       location.href = next && /^[a-z-]+\.html(\?[^/]*)?$/.test(next) && !next.startsWith('login') ? next : homeFor(me);
     } catch (err) {

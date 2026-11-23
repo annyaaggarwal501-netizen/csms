@@ -51,7 +51,33 @@ async function init() {
   initBrowse();
   const cn = param('cn');
   if (cn) loadCreditNote(cn);
+  else await restoreDraft();
   render();
+}
+
+// ---------- unfinished bill is remembered on this device ----------
+// If the page is refreshed, the browser closes or someone opens another screen, the open bill comes back.
+// Prices, offers and stock are always checked again by the server when it comes back.
+
+function saveDraft() {
+  if (state.saved || !state.cart.length) { store.del('posDraft'); return; }
+  store.set('posDraft', { at: Date.now(), cart: state.cart, customerId: state.customer && state.customer.id,
+    payments: state.payments, autoPay: state.autoPay, creditNote: state.creditNote, cashGiven: $('cashGiven').value });
+}
+
+async function restoreDraft() {
+  const d = store.get('posDraft');
+  if (!d || !Array.isArray(d.cart) || !d.cart.length || Date.now() - d.at > 24 * 3600e3) { store.del('posDraft'); return; }
+  state.cart = d.cart;
+  state.payments = d.payments && d.payments.length ? d.payments : state.payments;
+  state.autoPay = d.autoPay !== false;
+  state.creditNote = d.creditNote || null;
+  $('cashGiven').value = d.cashGiven || '';
+  if (d.customerId) {
+    try { state.customer = await api('/customers/' + d.customerId); } catch (e) { state.customer = null; }
+  }
+  if (state.customer) setCustomer(state.customer); else await requote();
+  toast(`Your unfinished bill is back (${state.cart.reduce((s, l) => s + l.quantity, 0)} pcs).`, 'ok');
 }
 
 function grand() { return state.quote ? Number(state.quote.grandTotal) : 0; }
@@ -151,7 +177,7 @@ async function requote() {
     state.quote = await api('/sales/quote', { method: 'POST', body: {
       customerId: state.customer && state.customer.id, lines: state.cart } });
   } catch (err) {
-    toast((err.code ? err.code + ' ' : '') + err.message, 'err');
+    toast(err.message, 'err');
   }
   render();
 }
@@ -189,6 +215,8 @@ async function clearCart() {
 }
 
 function resetSale() {
+  state.saved = false;
+  store.del('posDraft');
   state.cart = [];
   state.quote = null;
   state.payments = [{ mode: 'CASH', amount: 0, reference: '' }];
@@ -206,6 +234,7 @@ function resetSale() {
 }
 
 function render() {
+  $('saleErr').innerHTML = '';
   const q = state.quote;
   const body = $('cartBody');
   if (!q || !q.lines.length) {
@@ -221,7 +250,7 @@ function render() {
           ${l.offerName ? '<div class="offer-tag">' + esc(l.offerName) + '</div>' : ''}
           <div><button class="small" data-disc="${i}">Edit</button></div></td>
       <td><span class="qty"><button data-minus="${i}">−</button><span>${l.quantity}</span><button data-plus="${i}">+</button></span></td>
-      <td class="num gst-col">${pct(l.gstRate)}${l.slabWarning ? ' <span class="badge warn" title="WARN-GST-001">!</span>' : ''}</td>
+      <td class="num gst-col">${pct(l.gstRate)}${l.slabWarning ? ' <span class="badge warn" title="Price is close to the 5%/18% GST boundary">!</span>' : ''}</td>
       <td class="num"><b>${rs(l.lineTotal)}</b></td>
       <td><button class="icon-btn danger" data-del="${i}" title="Remove">×</button></td></tr>`).join('');
     body.querySelectorAll('[data-minus]').forEach(b => b.onclick = () => changeQty(+b.dataset.minus, -1));
@@ -231,11 +260,7 @@ function render() {
   }
   $('cartCount').textContent = q ? `(${q.totalQty} pcs)` : '';
 
-  $('warnings').innerHTML = (q ? q.warnings : []).map(w => {
-    const m = w.match(/^([A-Z]+-[A-Z]+-\d+):\s*(.*)$/);
-    const cls = m && m[1].startsWith('ERR') ? 'err' : 'warn';
-    return `<div class="msg ${cls}">${m ? '<span class="code">' + m[1] + '</span>' + esc(m[2]) : esc(w)}</div>`;
-  }).join('');
+  $('warnings').innerHTML = (q ? q.warnings : []).map(noticeHtml).join('');
 
   $('tQty').textContent = q ? q.totalQty : 0;
   $('tSub').textContent = rs(q ? q.subtotal : 0);
@@ -307,8 +332,22 @@ function updateComplete() {
   const ok = state.quote && state.quote.lines.length && state.quote.lines.every(l => l.enoughStock);
   $('completeBtn').disabled = !ok;
   const diff = Math.round((grand() - paid) * 100) / 100;
-  $('payMsg').innerHTML = state.quote && diff !== 0
-    ? `<div class="msg warn">${diff > 0 ? 'Still to collect: ' + rs(diff) : 'Payments are ' + rs(-diff) + ' more than the total'}</div>` : '';
+  const c = creditCheck();
+  $('payMsg').innerHTML = (state.quote && diff !== 0
+    ? `<div class="msg warn">${diff > 0 ? 'Still to collect: ' + rs(diff) : 'Payments are ' + rs(-diff) + ' more than the total'}</div>` : '')
+    + (c.amount > 0 && !state.customer ? '<div class="msg warn" style="margin-top:.4rem"><b>Warning:</b> Choose the customer first – credit (udhaar) needs a customer.</div>' : '')
+    + (c.amount > 0 && state.customer && !c.over ? `<div class="msg info" style="margin-top:.4rem">Credit available for ${esc(state.customer.name)}: <b>${rs0(c.available)}</b> (limit ${rs0(c.limit)}, already due ${rs0(c.due)}).</div>` : '')
+    + (c.over ? `<div class="msg err" style="margin-top:.4rem"><b>Over the credit limit by ${rs0(c.amount - c.available)}.</b> ${esc(state.customer.name)} can take only ${rs0(c.available)} more on credit (limit ${rs0(c.limit)}, already due ${rs0(c.due)}). ${ME.role === 'OWNER' ? 'As the Owner you can still save it.' : 'Take the rest in cash/UPI, or the Owner approves with the PIN.'}</div>` : '');
+  saveDraft();
+}
+
+/** Credit (udhaar) on this bill compared with the customer's credit limit. */
+function creditCheck() {
+  const amount = state.payments.filter(p => p.mode === 'CREDIT').reduce((s, p) => s + Number(p.amount || 0), 0);
+  const c = state.customer;
+  if (!c || amount <= 0) return { amount, over: false };
+  const limit = Number(c.creditLimit || 0), due = Number(c.creditDue || 0), available = Math.max(0, limit - due);
+  return { amount, limit, due, available, over: amount > available + 0.001 };
 }
 
 async function loadCreditNote(cnNo) {
@@ -346,8 +385,11 @@ function setCustomer(c) {
     <div class="row small" style="margin-top:.4rem">
       ${c.waOptIn ? '<span class="badge ok">WhatsApp opted in</span>' : '<span class="badge grey">No WhatsApp consent</span>'}
       <span class="badge brand">${c.loyaltyPoints} points</span>
-      ${Number(c.creditDue) > 0 ? '<span class="badge warn">Credit due ' + rs0(c.creditDue) + '</span>' : ''}
-    </div>`;
+    </div>
+    <div class="small" style="margin-top:.45rem">${Number(c.creditLimit) > 0
+      ? `Credit (udhaar): due <b>${rs0(c.creditDue)}</b> of <b>${rs0(c.creditLimit)}</b> limit · <span style="color:${Number(c.creditLimit) - Number(c.creditDue) > 0 ? 'var(--ok)' : 'var(--err)'}">${rs0(Math.max(0, Number(c.creditLimit) - Number(c.creditDue)))} available</span>`
+      : Number(c.creditDue) > 0 ? `<span style="color:var(--err)">Credit due ${rs0(c.creditDue)} · no credit limit set</span>`
+      : '<span class="muted">No credit limit – credit (udhaar) needs Owner approval.</span>'}</div>`;
   $('custClear').onclick = () => { setCustomer(null); $('custMobile').focus(); };
   requote();
 }
@@ -386,6 +428,22 @@ async function complete() {
     if (!pin) return;
     state.ownerPin = pin;
   }
+  const credit = creditCheck();
+  if (credit.amount > 0 && !state.customer) {
+    $('saleErr').innerHTML = errorHtml({ message: 'A credit (udhaar) sale needs a customer. Find or register the customer first.' });
+    return;
+  }
+  if (credit.over) {
+    const msg = `${state.customer.name} can take only ${rs0(credit.available)} more on credit (limit ${rs0(credit.limit)}, already due ${rs0(credit.due)}). This bill puts ${rs0(credit.amount)} on credit.`;
+    if (ME.role === 'OWNER') {
+      if (!(await confirmBox(msg + ' Save it over the limit?', 'Yes, save'))) return;
+    } else if (!state.ownerPin) {
+      const pin = await askOwnerPin(msg + ' The Owner can approve it with the PIN.');
+      if (!pin) return;
+      state.ownerPin = pin;
+    }
+  }
+  $('saleErr').innerHTML = '';
   const btn = $('completeBtn');
   btn.disabled = true;
   btn.textContent = 'Saving…';
@@ -396,10 +454,12 @@ async function complete() {
       payments: state.payments.filter(p => Number(p.amount) > 0)
         .map(p => ({ mode: p.mode, amount: Number(p.amount), reference: p.reference || null })),
       ownerPin: state.ownerPin } });
+    state.saved = true;
+    store.del('posDraft');
     showDone(res);
   } catch (err) {
-    if (err.code === 'ERR-BIL-005') state.ownerPin = null;
-    $('payMsg').innerHTML = errorHtml(err);
+    if (err.code === 'ERR-BIL-005' || err.code === 'ERR-CUS-002') state.ownerPin = null;
+    $('saleErr').innerHTML = errorHtml(err);
     if (err.code === 'ERR-INV-001') requote();
   } finally {
     btn.textContent = 'Complete Sale (F9)';
@@ -418,7 +478,7 @@ function showDone(res) {
     </div>
     ${change > 0 ? `<div class="msg ok" style="margin-top:.8rem;font-size:1.1rem">Return change: <b>${rs0(change)}</b></div>` : ''}
     ${res.pointsEarned ? `<p class="small">Customer earned <b>${res.pointsEarned}</b> loyalty points.</p>` : ''}
-    ${res.warnings.map(w => `<div class="msg warn" style="margin-top:.5rem">${esc(w)}</div>`).join('')}
+    ${res.warnings.map(w => `<div style="margin-top:.5rem">${noticeHtml(w)}</div>`).join('')}
     ${res.stockAlerts.map(a => `<div class="msg ${a.startsWith('OUT') ? 'err' : 'warn'}" style="margin-top:.5rem">⚠ ${esc(a)}</div>`).join('')}
     <div class="actions">
       <button id="dPrint">Print receipt</button>

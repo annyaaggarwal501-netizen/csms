@@ -60,14 +60,36 @@ function debounce(fn, ms = 250) {
   let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
 }
 
-/** "ERR-BIL-003 Payments add up to..." as an inline red message (SRS 3.2: error code next to the text). */
+// ---------- messages ----------
+// The server sends a code with every error (e.g. ERR-BIL-003). People see only the kind of message
+// ("Error:", "Warning:", "Note:") and the text; the code stays in err.code for the program and the logs.
+const MSG_CODE = /^\s*(ERR|WARN|INFO)-[A-Z]+-\d+\s*[:\-–]?\s*/;
+/** Removes a leading message code: "WARN-CUS-001: Over limit" -> "Over limit". */
+function cleanMsg(s) { return String(s ?? '').replace(MSG_CODE, ''); }
+/** [css class, label] for a code or a message that starts with one. */
+function msgKind(codeOrText) {
+  const k = String(codeOrText || '').trim().slice(0, 4);
+  if (k.startsWith('WARN')) return ['warn', 'Warning'];
+  if (k.startsWith('INFO')) return ['info', 'Note'];
+  return ['err', 'Error'];
+}
+/** An error as an inline message box: "Error: Payments add up to …". */
 function errorHtml(err) {
-  return `<div class="msg err">${err.code ? `<span class="code">${esc(err.code)}</span>` : ''}${esc(err.message)}</div>`;
+  const [cls, label] = msgKind(err.code || err.message);
+  return `<div class="msg ${cls}"><b>${label}:</b> ${esc(cleanMsg(err.message))}</div>`;
+}
+/** A server warning/info line as a message box (codes removed). */
+function noticeHtml(text) {
+  const [cls, label] = MSG_CODE.test(text) ? msgKind(text) : ['warn', 'Warning'];
+  return `<div class="msg ${cls}"><b>${label}:</b> ${esc(cleanMsg(text))}</div>`;
 }
 function showError(el, err) { el.innerHTML = errorHtml(err); el.classList.remove('hidden'); }
 function clearMsg(el) { el.innerHTML = ''; }
 
 function toast(message, type = '') {
+  message = cleanMsg(message);
+  if (type === 'err' && !/^error/i.test(message)) message = 'Error: ' + message;
+  if (type === 'warn' && !/^warning/i.test(message)) message = 'Warning: ' + message;
   let box = document.getElementById('toasts');
   if (!box) { box = document.createElement('div'); box.id = 'toasts'; document.body.appendChild(box); }
   const t = document.createElement('div');
@@ -115,6 +137,19 @@ function askOwnerPin(reason) {
     inp.addEventListener('keydown', e => { if (e.key === 'Enter') ok(); });
   });
 }
+
+// ---------- remembered on this device ----------
+// Small things the app remembers between visits (open bill, filters, chosen tabs), per user, in this browser.
+// Never prices or stock: those always come fresh from the server.
+const store = {
+  key(k) { return 'csms:' + ((window.ME && window.ME.username) || '_') + ':' + k; },
+  get(k, fallback = null) {
+    try { const v = localStorage.getItem(this.key(k)); return v == null ? fallback : JSON.parse(v); }
+    catch (e) { return fallback; }
+  },
+  set(k, v) { try { localStorage.setItem(this.key(k), JSON.stringify(v)); } catch (e) { /* private mode / full */ } },
+  del(k) { try { localStorage.removeItem(this.key(k)); } catch (e) { /* ignore */ } },
+};
 
 // ---------- login check + navigation ----------
 

@@ -105,6 +105,10 @@ public class CustomerService {
             if (req.creditLimit().signum() < 0) {
                 throw ApiException.badRequest("ERR-VAL-001", "Credit limit cannot be negative.", "creditLimit");
             }
+            if (c.getId() != null && c.getCreditLimit().compareTo(req.creditLimit()) != 0) {
+                audit.log("CREDIT_LIMIT_CHANGED", "customer", c.getId(), c.getName() + ": Rs " + c.getCreditLimit()
+                        + " -> Rs " + req.creditLimit());
+            }
             c.setCreditLimit(req.creditLimit());
         }
     }

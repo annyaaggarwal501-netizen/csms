@@ -71,6 +71,23 @@ public class CreditService {
         return Map.of("customerId", c.getId(), "creditDue", c.getCreditDue());
     }
 
+    /** Owner sets how much credit (udhaar) a customer may have outstanding. 0 = no credit without the Owner PIN. */
+    @Transactional
+    public Map<String, Object> setLimit(Long customerId, BigDecimal limit) {
+        if (!CurrentUser.isOwner()) {
+            throw ApiException.forbidden("ERR-ACC-003", "Only the Owner can change credit limits.");
+        }
+        Customer c = customers.lockById(customerId)
+                .orElseThrow(() -> ApiException.notFound("INFO-CUS-001", "Customer not found."));
+        if (limit == null || limit.signum() < 0 || limit.scale() > 2 || limit.compareTo(BigDecimal.valueOf(10_000_000)) > 0) {
+            throw ApiException.badRequest("ERR-VAL-001", "Enter a credit limit from 0 to 1,00,00,000.", "creditLimit");
+        }
+        BigDecimal old = c.getCreditLimit();
+        c.setCreditLimit(Money.round(limit));
+        audit.log("CREDIT_LIMIT_CHANGED", "customer", c.getId(), c.getName() + ": Rs " + old + " -> Rs " + c.getCreditLimit());
+        return Map.of("customerId", c.getId(), "creditLimit", c.getCreditLimit(), "creditDue", c.getCreditDue());
+    }
+
     public List<Map<String, Object>> ledger(Long customerId) {
         return jdbc.queryForList("""
                 SELECT t.txn_id, t.type, t.amount, t.sale_id, s.invoice_no, t.mode, t.note, t.balance_after,
@@ -86,7 +103,8 @@ public class CreditService {
                 SELECT c.customer_id, c.name, c.mobile, c.area, c.credit_due, c.credit_limit,
                        (SELECT MAX(t.created_at) FROM customer_credit_txn t WHERE t.customer_id = c.customer_id AND t.type = 'SALE') AS last_credit,
                        (SELECT MAX(t.created_at) FROM customer_credit_txn t WHERE t.customer_id = c.customer_id AND t.type = 'REPAYMENT') AS last_payment
-                FROM customer c WHERE c.credit_due > 0 ORDER BY last_credit NULLS LAST""");
+                FROM customer c WHERE c.credit_due > 0 OR c.credit_limit > 0
+                ORDER BY c.credit_due DESC, c.name""");
     }
 
     private void insert(Long customerId, String type, BigDecimal amount, Long saleId, String mode, String note, BigDecimal balance) {

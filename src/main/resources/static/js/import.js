@@ -43,8 +43,8 @@ function openImport() {
             <td>${esc(r.size)} / ${esc(r.colour)}</td><td class="num">${r.sellingPrice != null ? rs0(r.sellingPrice) : ''}</td>
             <td class="num">${r.openingStock ?? ''}</td>
             <td class="small">${r.messages.map(x => {
-              const c = x.match(/^((?:ERR|WARN)-[A-Z]+-\d+)\s(.*)$/);
-              return '<div>' + (c ? '<span class="code">' + c[1] + '</span>' + esc(c[2]) : esc(x)) + '</div>';
+              const [cls, label] = msgKind(x);
+              return '<div><span class="badge ' + cls + '">' + label + '</span> ' + esc(cleanMsg(x)) + '</div>';
             }).join('')}</td></tr>`).join('')}</tbody></table></div>`;
       const filter = () => {
         const only = el.querySelector('#impProblems').checked;

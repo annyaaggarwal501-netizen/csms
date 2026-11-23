@@ -43,9 +43,13 @@
     if (gst) document.querySelectorAll('.gst-only').forEach(e => e.classList.remove('hidden'));
     $('tabs').querySelectorAll('button').forEach(b => b.onclick = () => {
       $('tabs').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
-      tab = b.dataset.t; load();
+      tab = b.dataset.t; store.set('reports.tab', tab); load();
     });
-    $('preset').onchange = () => { setPreset(); load(); };
+    $('preset').onchange = () => { store.set('reports.preset', $('preset').value); setPreset(); load(); };
+    $('preset').value = store.get('reports.preset', 'month');
+    const t0 = store.get('reports.tab', 'sales');
+    const tb = $('tabs').querySelector(`[data-t="${t0}"]:not(.hidden)`);
+    if (tb) { tab = t0; $('tabs').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === tb)); }
     $('from').onchange = $('to').onchange = () => { $('preset').value = 'custom'; load(); };
     $('printBtn').onclick = () => window.print();
     $('csvBtn').onclick = () => csv && csv();

@@ -202,13 +202,6 @@ public class BillingService {
                         throw ApiException.badRequest("ERR-VAL-001", "A credit (udhaar) sale needs a customer.", "payments");
                     }
                     creditAmount = creditAmount.add(amount);
-                    if (customer.getCreditDue().add(creditAmount).compareTo(customer.getCreditLimit()) > 0) {
-                        BigDecimal due = customer.getCreditDue().add(creditAmount);
-                        warnings.add("WARN-CUS-001: " + customer.getName() + " is now over the credit limit (due Rs "
-                                + due + ", limit Rs " + customer.getCreditLimit() + ").");
-                        alerts.raise("CREDIT_LIMIT", "WARN", customer.getId(), "Credit limit exceeded: "
-                                + customer.getName() + " due Rs " + due);
-                    }
                 }
                 case CREDIT_NOTE -> {
                     redeemCreditNote(ref, amount, now.toLocalDate());
@@ -219,7 +212,33 @@ public class BillingService {
             }
             sale.getPayments().add(new Payment(sale, p.mode(), amount, ref));
         }
+        boolean overLimit = creditAmount.signum() > 0
+                && customer.getCreditDue().add(creditAmount).compareTo(customer.getCreditLimit()) > 0;
+        if (overLimit) {
+            // Credit limit (REQ-CUS-5): staff cannot go over it; the Owner can, or approves with the Owner PIN.
+            BigDecimal available = customer.getCreditLimit().subtract(customer.getCreditDue()).max(BigDecimal.ZERO);
+            if (!CurrentUser.isOwner() && !ownerPin.matches(req.ownerPin())) {
+                if (req.ownerPin() != null && !req.ownerPin().isBlank()) {
+                    throw new ApiException(HttpStatus.FORBIDDEN, "ERR-CUS-002", "The Owner PIN is not correct. "
+                            + customer.getName() + " can take only Rs " + available + " more on credit.", "ownerPin");
+                }
+                throw new ApiException(HttpStatus.FORBIDDEN, "ERR-CUS-002", customer.getName() + " can take only Rs "
+                        + available + " more on credit (limit Rs " + customer.getCreditLimit() + ", already due Rs "
+                        + customer.getCreditDue() + "). Ask the Owner to approve with the PIN, or take the rest in cash/UPI.",
+                        "creditLimit");
+            }
+            BigDecimal due = customer.getCreditDue().add(creditAmount);
+            warnings.add(customer.getName() + " is now over the credit limit (due Rs " + due + ", limit Rs "
+                    + customer.getCreditLimit() + ").");
+            alerts.raise("CREDIT_LIMIT", "WARN", customer.getId(), "Credit limit exceeded: " + customer.getName()
+                    + " due Rs " + due + " (limit Rs " + customer.getCreditLimit() + ")");
+        }
         sales.save(sale);
+        if (overLimit) {
+            audit.log("CREDIT_LIMIT_OVERRIDE", "sale", sale.getId(), sale.getInvoiceNo() + ": " + customer.getName()
+                    + " credit Rs " + creditAmount + " over limit Rs " + customer.getCreditLimit()
+                    + (CurrentUser.isOwner() ? " (by Owner)" : " (approved with Owner PIN)"));
+        }
         if (creditAmount.signum() > 0) {
             credit.creditSale(customer, creditAmount, sale.getId(), sale.getInvoiceNo());
         }
