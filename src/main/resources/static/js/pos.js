@@ -35,7 +35,7 @@ async function init() {
     state.payments.push({ mode: 'UPI', amount: left, reference: '' });
     renderPayments();
   };
-  $('cashGiven').addEventListener('input', () => { renderChange(); updateComplete(); });
+  $('cashGiven').addEventListener('input', renderChange);
   $('completeBtn').onclick = complete;
   $('holdBtn').onclick = holdBill;
   $('heldBtn').onclick = showHeld;
@@ -324,44 +324,21 @@ function refHint(mode) {
   return { UPI: 'UPI ref (optional)', CARD: 'Last 4 digits', CREDIT_NOTE: 'CN-2627-00001', CREDIT: 'Note', CASH: '' }[mode] || '';
 }
 
-/** Cash part of the bill (sum of the Cash payment rows). */
-function cashDue() {
-  return state.payments.filter(p => p.mode === 'CASH').reduce((s, p) => s + Number(p.amount || 0), 0);
-}
-
 function renderChange() {
-  const cash = cashDue();
-  const raw = $('cashGiven').value.trim();
-  const given = Number(raw || 0);
-  const short = raw !== '' && given < cash;
-  $('change').textContent = short ? 'Short ' + rs0(cash - given) : rs0(Math.max(0, given - cash));
-  $('change').style.color = short ? 'var(--err)' : '';
-  $('cashGiven').classList.toggle('invalid', short);
-  // One-tap amounts: exact, then the usual notes above the cash amount.
-  const quick = cash > 0 ? [cash, ...[100, 500, 2000].map(n => Math.ceil(cash / n) * n)] : [];
-  $('cashQuick').innerHTML = [...new Set(quick)].filter(v => v >= cash).slice(0, 4)
-    .map((v, i) => `<button type="button" class="small" data-cash="${v}">${i === 0 ? 'Exact ' : ''}${rs0(v)}</button>`).join('');
-  $('cashQuick').querySelectorAll('[data-cash]').forEach(btn => btn.onclick = () => {
-    $('cashGiven').value = btn.dataset.cash; renderChange(); updateComplete();
-  });
+  const cash = state.payments.filter(p => p.mode === 'CASH').reduce((s, p) => s + Number(p.amount || 0), 0);
+  const given = Number($('cashGiven').value || 0);
+  $('change').textContent = given > 0 ? rs0(Math.max(0, given - cash)) : '₹0';
+  $('change').style.color = given > 0 && given < cash ? 'var(--err)' : '';
 }
 
 function updateComplete() {
   const paid = state.payments.reduce((s, p) => s + Number(p.amount || 0), 0);
-  const itemsOk = state.quote && state.quote.lines.length && state.quote.lines.every(l => l.enoughStock);
+  const ok = state.quote && state.quote.lines.length && state.quote.lines.every(l => l.enoughStock);
+  $('completeBtn').disabled = !ok;
   const diff = Math.round((grand() - paid) * 100) / 100;
-  const cash = cashDue();
-  const givenRaw = $('cashGiven').value.trim();
-  const cashShort = cash > 0 && (givenRaw === '' || Number(givenRaw) < cash);
-  // A bill can be saved only when the payments match the total and all the cash has been received.
-  $('completeBtn').disabled = !itemsOk || diff !== 0 || cashShort;
   const c = creditCheck();
   $('payMsg').innerHTML = (state.quote && diff !== 0
     ? `<div class="msg warn">${diff > 0 ? 'Still to collect: ' + rs(diff) : 'Payments are ' + rs(-diff) + ' more than the total'}</div>` : '')
-    + (state.quote && diff === 0 && cashShort
-      ? `<div class="msg ${givenRaw === '' ? 'info' : 'err'}" style="margin-top:.4rem">${givenRaw === ''
-          ? `Type the <b>cash received</b> from the customer (cash part ${rs0(cash)}), or tap <b>Exact</b>.`
-          : `<b>Cash received is ${rs0(cash - Number(givenRaw))} less</b> than the cash part of the bill (${rs0(cash)}). Collect the rest, or change the payment (e.g. split with UPI).`}</div>` : '')
     + (c.amount > 0 && !state.customer ? '<div class="msg warn" style="margin-top:.4rem"><b>Warning:</b> Choose the customer first – credit (udhaar) needs a customer.</div>' : '')
     + (c.amount > 0 && state.customer && !c.over ? `<div class="msg info" style="margin-top:.4rem">Credit available for ${esc(state.customer.name)}: <b>${rs0(c.available)}</b> (limit ${rs0(c.limit)}, already due ${rs0(c.due)}).</div>` : '')
     + (c.over ? `<div class="msg err" style="margin-top:.4rem"><b>Over the credit limit by ${rs0(c.amount - c.available)}.</b> ${esc(state.customer.name)} can take only ${rs0(c.available)} more on credit (limit ${rs0(c.limit)}, already due ${rs0(c.due)}). ${ME.role === 'OWNER' ? 'As the Owner you can still save it.' : 'Take the rest in cash/UPI, or the Owner approves with the PIN.'}</div>` : '');
@@ -460,7 +437,6 @@ function showRegister(mobile) {
 // ---------- complete sale ----------
 
 async function complete() {
-  if ($('completeBtn').disabled) return;
   const q = state.quote;
   if (!q || !q.lines.length) return;
   if (q.needsOwnerPin && ME.role !== 'OWNER' && !state.ownerPin) {
